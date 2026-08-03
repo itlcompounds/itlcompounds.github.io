@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1926-fc5653";
+const BUILD = "20260803-1936-759399";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -629,13 +629,14 @@ function moveIn(item, qty, lotId){
                qty, cost:lot?lotUnitCost(lot):unitCost(item.id), price:num(item.price)});
 }
 // FIFO: pull from the oldest lot with stock so cost of goods matches what you actually shipped
-function moveOut(item, qty, orderId, packQty){
+function moveOut(item, qty, orderId, packQty, sellOverride){
   if(num(item.qty) < qty) return false;
   // Whatever the buyer's tier is, that is the revenue actually earned — and
-  // for friends it also depends on whether this went out as a kit.
+  // for friends it also depends on whether this went out as a kit. A caller
+  // can pass the real negotiated price instead, so line and ledger agree.
   const tier = orderTier(S.orders.find(o => o.id === orderId));
   const pack = num(packQty) || 1;
-  const sell = priceFor(item, tier, pack);
+  const sell = (sellOverride != null && sellOverride !== "") ? num(sellOverride) : priceFor(item, tier, pack);
   let left = qty;
   const lots = S.lots.filter(l => l.itemId===item.id && num(l.remaining) > 0);
   while(left > 0 && lots.length){
@@ -4427,8 +4428,9 @@ function orderAddSheet(orderId, filter){
   const tier = orderTier(o);
   const q = String(filter||"").trim().toLowerCase();
   // Remember typed quantities across re-renders (searching must not wipe them)
-  const prev = {};
+  const prev = {}, prevP = {};
   document.querySelectorAll(".oa_q").forEach(el => { if(num(el.value) > 0) prev[el.dataset.item] = el.value; });
+  document.querySelectorAll(".oa_p").forEach(el => { if(el.value !== "") prevP[el.dataset.item] = el.value; });
   const pool = S.items.slice()
     .filter(i => !q || (i.name||"").toLowerCase().includes(q) || (i.code||"").toLowerCase().includes(q))
     .sort((a,b) => (num(b.qty)>0)-(num(a.qty)>0) ||
@@ -4437,11 +4439,15 @@ function orderAddSheet(orderId, filter){
     const sell = priceFor(i, tier, 1);
     const v = prev[i.id] || "0";
     const out = num(i.qty) <= 0;
+    const pv = prevP[i.id] != null ? prevP[i.id] : sell;
     return '<div class="row'+(num(v)>0?' po_row_active':'')+' po_row" id="oar_'+i.id+'">'+
       '<span class="nm"><b>'+esc(i.name)+'</b>'+
-      '<small><b>'+esc(i.code||"")+'</b> \u00b7 '+num(i.qty)+' on hand'+(out?' \u00b7 OUT':'')+' \u00b7 '+money(sell)+' each</small></span>'+
-      '<span style="width:58px;flex:none;margin-left:auto"><input class="num oa_q" data-item="'+i.id+'" '+
-      'type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"'+(out?' disabled':'')+'></span></div>';
+      '<small><b>'+esc(i.code||"")+'</b> \u00b7 '+num(i.qty)+' on hand'+(out?' \u00b7 OUT':'')+' \u00b7 list '+money(sell)+'</small></span>'+
+      '<span style="display:flex;gap:4px;align-items:center;margin-left:auto">'+
+      '<span style="width:74px;flex:none"><input class="num oa_p" data-item="'+i.id+'" type="number" step="any" inputmode="decimal" '+
+      'value="'+pv+'" placeholder="$ each" style="text-align:center;padding:6px"'+(out?' disabled':'')+'></span>'+
+      '<span style="width:58px;flex:none"><input class="num oa_q" data-item="'+i.id+'" '+
+      'type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"'+(out?' disabled':'')+'></span></span></div>';
   }).join("");
   sheet('<h2>Add to '+esc(o.ref)+'</h2>'+
     '<p class="hint" style="margin-top:-6px">'+(tier==="friends"?"Friends &amp; family prices":"Retail prices")+' \u00b7 vials come out of stock when you add them.</p>'+
@@ -4459,12 +4465,13 @@ function orderAddSheet(orderId, filter){
     if(go) go.onclick = () => orderAddCommit(orderId);
     const recount = () => {
       let items = 0, vials = 0, rev = 0;
+      const priceOf = {};
+      document.querySelectorAll(".oa_p").forEach(el => { priceOf[el.dataset.item] = num(el.value); });
       document.querySelectorAll(".oa_q").forEach(el => {
         const n = num(el.value);
         if(n > 0){
           items++; vials += n;
-          const it = S.items.find(x => x.id === el.dataset.item);
-          if(it) rev += n * priceFor(it, tier, 1);
+          rev += n * num(priceOf[el.dataset.item]);
         }
       });
       const c = document.getElementById('oa_count');
@@ -4475,6 +4482,7 @@ function orderAddSheet(orderId, filter){
       if(row) row.classList.toggle("po_row_active", num(this.value) > 0);
       recount();
     }));
+    document.querySelectorAll(".oa_p").forEach(el => el.addEventListener("input", recount));
     recount();
     // Keep typing flow in the search box after re-render
     const sb = document.getElementById('oa_search');
@@ -4484,18 +4492,20 @@ function orderAddSheet(orderId, filter){
 function orderAddCommit(orderId){
   const o = S.orders.find(x => x.id === orderId); if(!o) return;
   const tier = orderTier(o);
+  const priceOf = {};
+  document.querySelectorAll(".oa_p").forEach(el => { priceOf[el.dataset.item] = num(el.value); });
   const wants = [];
   document.querySelectorAll(".oa_q").forEach(el => {
     const n = num(el.value);
-    if(n > 0) wants.push({itemId: el.dataset.item, qty: n});
+    if(n > 0) wants.push({itemId: el.dataset.item, qty: n, price: num(priceOf[el.dataset.item])});
   });
   if(!wants.length){ toast("Set a quantity first"); return; }
   const short = [];
   let added = 0;
   wants.forEach(w => {
     const it = S.items.find(x => x.id === w.itemId); if(!it) return;
-    if(!moveOut(it, w.qty, o.id, 1)){ short.push(it.name+" ("+num(it.qty)+" on hand)"); return; }
-    const sell = priceFor(it, tier, 1);
+    if(!moveOut(it, w.qty, o.id, 1, w.price)){ short.push(it.name+" ("+num(it.qty)+" on hand)"); return; }
+    const sell = w.price;
     const line = o.lines.find(l => l.itemId === it.id && num(l.price) === sell);
     if(line) line.qty += w.qty; else o.lines.push({itemId: it.id, qty: w.qty, price: sell, pack: 1});
     added += w.qty;
