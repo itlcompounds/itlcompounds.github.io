@@ -125,6 +125,7 @@ main{padding:var(--pad);max-width:620px;margin:0 auto}
   background:var(--slate);border:1px solid var(--line);border-radius:4px;margin-bottom:6px;width:100%;text-align:left;
 }
 .row.low{border-left:3px solid var(--alert)}
+.po_row_active{border-left:3px solid var(--brand);background:rgba(59,130,246,.08)}
 .row .nm{flex:1;min-width:0}
 .row .nm b{font-family:var(--cond);font-weight:600;font-size:16px;letter-spacing:.02em;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .nm small{color:var(--muted);font-family:var(--mono);font-size:11px}
@@ -165,6 +166,7 @@ nav .dot{position:absolute;top:6px;right:calc(50% - 22px);width:6px;height:6px;b
 .costtot{display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid var(--line);margin-top:10px;padding-top:10px;font-family:var(--mono)}
 .costtot b{font-size:20px;color:var(--brand)}
 .sheetact{display:flex;gap:8px;margin-top:14px}
+.po_row_active{background:var(--brand-dim,rgba(59,130,246,.15));border-radius:6px;outline:1px solid var(--brand)}
 .sheetact .btn{flex:1;text-align:center}
 video{width:100%;border-radius:4px;background:#000;display:block}
 .toast{
@@ -320,7 +322,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-0749-ebd56f";
+const BUILD = "20260803-0845-acf466";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1672,13 +1674,17 @@ function poLinesRefresh(){
   $("po_lines").innerHTML = S.items.map(i => {
     const p = vendorPriceFor(sup, i.id);
     const short = num(i.qty) <= num(i.reorder);
-    return '<div class="row'+(short?' low':'')+'"><span class="nm"><b>'+esc(i.name)+
+    return '<div class="row'+(short?' low':'')+' po_row" id="por_'+i.id+'"><span class="nm"><b>'+esc(i.name)+
       (short?' <span class="pill alert">low</span>':'')+'</b><small>'+num(i.qty)+' on hand'+
       (p!=null?' · '+money(p)+'/kit':' · no price on file')+'</small></span>'+
       '<span style="width:64px;flex:none"><input class="num po_k" data-item="'+i.id+'" data-price="'+(p||0)+
       '" type="number" inputmode="numeric" min="0" value="0" style="text-align:center;padding:6px"></span></div>';
   }).join("") + (lead ? '<p class="hint">Past orders from this vendor landed in about '+lead+' days.</p>' : '');
-  document.querySelectorAll(".po_k").forEach(el => el.addEventListener("input", poLiveTotal));
+  document.querySelectorAll(".po_k").forEach(el => el.addEventListener("input", function(){
+    poLiveTotal();
+    const row = document.getElementById("por_"+this.dataset.item);
+    if(row) row.classList.toggle("po_row_active", num(this.value) > 0);
+  }));
   poLiveTotal();
 }
 function saveNewPO(){
@@ -1796,9 +1802,9 @@ function setPOStatus(id, st){
 function askDeletePO(id){
   const po = S.pos.find(x => x.id === id); if(!po) return;
   const lots = S.lots.filter(l => l.poId === id).length;
-  confirmDelete("Delete this purchase?",
-    money(poLanded(po))+" of order history goes, including the lead time it contributes to reorder points."+
-    (lots ? " The "+lots+" lot"+(lots===1?"":"s")+" it created stay, but lose their link back." : ""),
+  const msg = money(poLanded(po))+" of order history goes, including the lead time it contributes to reorder points."+
+    (lots ? " The "+lots+" lot"+(lots===1?"":"s")+" it created stay, but lose their link back." : "");
+  confirmDelete("Delete this purchase?", msg,
     "deletePO('"+id+"')", "openPO('"+id+"')");
 }
 function deletePO(id){
