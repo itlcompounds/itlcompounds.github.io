@@ -320,7 +320,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-0714-42d552";
+const BUILD = "20260803-0749-ebd56f";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4000,7 +4000,8 @@ function openOrder(id){
     ["open","packed","shipped"].map(s => '<option'+(o.status===s?' selected':'')+'>'+s+'</option>').join("")+'</select></div>'+
     '<div class="sheetact"><button class="btn" onclick="pickOrder(\''+o.id+'\')">Pick into this</button>'+
     '<button class="btn" onclick="shipSheet(\''+o.id+'\')">Ship</button>'+
-    '<button class="btn pri" onclick="saveOrder(\''+o.id+'\')">Save</button></div>');
+    '<button class="btn pri" onclick="saveOrder(\''+o.id+'\')">Save</button></div>'+
+    dangerZone("Delete order", "askDeleteOrder(\''+o.id+'\')"));
 }
 function saveOrder(id, quiet){
   const o = S.orders.find(x => x.id === id); if(!o) return;
@@ -4014,6 +4015,29 @@ function saveOrder(id, quiet){
   save(); renderAll();
   if(quiet) return;
   closeSheet(); toast("Saved");
+}
+function askDeleteOrder(id){
+  const o = S.orders.find(x => x.id === id); if(!o) return;
+  const vials = S.txns.filter(t => t.orderId === id && t.dir === "out")
+                      .reduce((s,t) => s + num(t.qty), 0);
+  confirmDelete("Delete " + esc(o.ref) + "?",
+    vials ? vials + " vial" + (vials===1?"":"s") + " go back into the lots they came from, and this sale disappears from the month\u2019s numbers."
+          : "Nothing was picked into it, so nothing else changes.",
+    "deleteOrder('"+id+"')", "openOrder('"+id+"')");
+}
+function deleteOrder(id){
+  // Reverse the order's movements exactly: each vial returns to the lot it
+  // left, and the out-movements are dropped so no phantom revenue lingers.
+  S.txns.filter(t => t.orderId === id && t.dir === "out").forEach(t => {
+    const it = S.items.find(i => i.id === t.itemId);
+    if(it) it.qty = num(it.qty) + num(t.qty);
+    const lo = S.lots.find(l => l.id === t.lotId);
+    if(lo) lo.remaining = num(lo.remaining) + num(t.qty);
+  });
+  S.txns = S.txns.filter(t => !(t.orderId === id && t.dir === "out"));
+  S.orders = S.orders.filter(x => x.id !== id);
+  if(S.activeOrder === id) S.activeOrder = null;
+  save(); closeSheet(); renderAll(); toast("Order deleted \u2014 stock restored");
 }
 function pickOrder(id){
   S.activeOrder = id; mode = "out"; setMode();
@@ -4540,7 +4564,7 @@ function openQuote(id){
     '<button class="btn full" style="margin-bottom:8px;border-color:#28503A;color:var(--ok)" onclick="saveQuote();quoteToOrder()">Turn into an order</button>'+
     '<div class="sheetact"><button class="btn" onclick="saveQuote();closeSheet();renderAll()">Close</button>'+
     '<button class="btn pri" onclick="saveQuote();closeSheet();renderAll()">Save</button></div>'+
-    dangerZone("Delete quote", "confirmDelete(\'Delete this quote?\',\'"+'"'+"+(q.lines||[]).length+"+'"'+" line(s) and the pricing you worked out.\',\'dropQuote()\',\'openQuote(&quot;'+q.id+'&quot;)\')"));
+    dangerZone("Delete quote", "confirmDelete(\'Delete this quote?\',\''+(q.lines||[]).length+' line(s) and the pricing you worked out.\',\'dropQuote()\',\'openQuote(&quot;'+q.id+'&quot;)\')"));
   renderQuoteFind();
 }
 function renderQuoteFind(){
