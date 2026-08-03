@@ -320,9 +320,42 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-0532-f5510d";
+const BUILD = "20260803-0603-babad8";
 
 /* ============ state ============ */
+/* ---- storage ---- */
+/*
+ * Plain browser storage. Wrapped because a private-browsing window or a full
+ * quota will throw, and a storage failure must never take the app down —
+ * without it the app still runs, it just leans entirely on sync.
+ */
+const store = (function(){
+  let ok = false;
+  try{
+    const probe = "__itl_probe";
+    localStorage.setItem(probe, "1");
+    localStorage.removeItem(probe);
+    ok = true;
+  }catch(e){ ok = false; }
+  return {
+    kind: ok ? "browser" : "none",
+    ok,
+    async get(k){
+      if(!ok) return null;
+      try{ const v = localStorage.getItem(k); return v == null ? null : {key:k, value:v}; }
+      catch(e){ return null; }
+    },
+    async set(k, v){
+      if(!ok) return null;
+      try{ localStorage.setItem(k, v); return {key:k, value:v}; }
+      catch(e){
+        console.error("storage write failed", e);
+        try{ toast("Could not save locally — storage full?"); }catch(_){}
+        return null;
+      }
+    },
+  };
+})();
 const KEY = "itlops:v1";
 const LEGACY_KEY = "vialbook:v1";   // migrate anything saved under the old name
 let S = { items:[], lots:[], txns:[], orders:[], suppliers:[], supplies:[], pos:[], customers:[], quotes:[], settings:{}, activeOrder:null };
@@ -374,11 +407,11 @@ function setupLink(){
 async function load(){
   try{
     let r = null;
-    try{ r = await window.storage.get(KEY); }catch(e){ r = null; }
+    try{ r = await store.get(KEY); }catch(e){ r = null; }
     if(!r || !r.value){
       try{
-        const old = await window.storage.get(LEGACY_KEY);
-        if(old && old.value){ r = old; await window.storage.set(KEY, old.value); }
+        const old = await store.get(LEGACY_KEY);
+        if(old && old.value){ r = old; await store.set(KEY, old.value); }
       }catch(e){ /* nothing under the old name either */ }
     }
     if(r && r.value) S = Object.assign(S, JSON.parse(r.value));
@@ -405,7 +438,7 @@ function saveLocal(){
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try{
-      if(window.storage && window.storage.set) await window.storage.set(KEY, JSON.stringify(S));
+      if(store.ok) await store.set(KEY, JSON.stringify(S));
     }catch(e){ /* no local store: sync is the system of record */ }
   }, 250);
 }
@@ -729,8 +762,8 @@ function deleteSupply(id){
 
 /* ============ sync ============ */
 /*
- * Two problems, one fix. window.storage only exists inside Claude, so a copy
- * saved to disk has nowhere to persist. And even where it works, it is one
+ * Two problems, one fix. Browser storage is per-device and per-origin, so a
+ * copy opened somewhere else starts empty. And even where it works, it is one
  * device. Pointing the app at your own endpoint solves both: the data lives
  * there, and any device you open it on sees the same copy.
  *
@@ -738,7 +771,7 @@ function deleteSupply(id){
  * one rather than overwriting, so two open tabs can't silently clobber
  * each other.
  */
-const hasLocalStore = (() => { try { return !!(window.storage && window.storage.get); } catch(e){ return false; } })();
+const hasLocalStore = store.ok;
 let syncBusy = false, syncTimer = null, syncMsg = "", syncOk = false;
 // Set only when load() finishes cleanly. Everything that writes upward checks
 // it first: a session that never read your data has no business overwriting it.
@@ -927,7 +960,8 @@ function syncSheet(){
     '<div class="rcells" style="border:1px solid var(--line);border-radius:4px;margin-bottom:10px">'+
       '<div><div class="k">Revision</div><div class="v">'+(num(S.settings.syncRev)||"—")+'</div></div>'+
       '<div><div class="k">Last sync</div><div class="v" style="font-size:12px">'+(at?new Date(at).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}):"never")+'</div></div>'+
-      '<div><div class="k">Local store</div><div class="v" style="color:'+(hasLocalStore?"var(--ok)":"var(--alert)")+'">'+(hasLocalStore?"yes":"none")+'</div></div></div>'+
+      '<div><div class="k">Local store</div><div class="v" style="color:'+(hasLocalStore?"var(--ok)":"var(--alert)")+'">'+
+      (store.ok ? "yes" : "none")+'</div></div></div>'+
     (syncMsg ? '<div class="astrip" style="border:1px solid '+(syncOk?'#28503A':'#4A2C29')+';border-radius:4px;margin-bottom:10px">'+
       '<span class="t" style="color:'+(syncOk?'var(--ok)':'var(--alert)')+'">'+esc(syncMsg)+'</span></div>' : '')+
     (S.items.length === 0 && S.lots.length === 0
@@ -2070,14 +2104,14 @@ function saveReview(){
   clearTimeout(reviewSaveTimer);
   reviewSaveTimer = setTimeout(async () => {
     try{
-      if(review.rows && review.rows.length && window.storage)
-        await window.storage.set(REVIEW_KEY, JSON.stringify(review));
+      if(review.rows && review.rows.length && store.ok)
+        await store.set(REVIEW_KEY, JSON.stringify(review));
     }catch(e){}
   }, 400);
 }
 async function loadReview(){
   try{
-    const r = await window.storage.get(REVIEW_KEY);
+    const r = await store.get(REVIEW_KEY);
     if(r && r.value){
       const v = JSON.parse(r.value);
       if(v && Array.isArray(v.rows) && v.rows.length) review = v;
@@ -2086,7 +2120,7 @@ async function loadReview(){
 }
 async function clearReview(){
   review = {supId:null, rows:[], col:0, maxNums:0, mode:review.mode||"merge"};
-  try{ if(window.storage) await window.storage.set(REVIEW_KEY, ""); }catch(e){}
+  try{ if(store.ok) await store.set(REVIEW_KEY, ""); }catch(e){}
 }
 function reviewEdits(){
   return (review.rows||[]).filter(r => r.touched).length;
@@ -3421,11 +3455,11 @@ let logoSource = null;   // original upload, kept for the session so the slider 
 async function loadLogo(){
   try{
     let r = null;
-    try{ r = await window.storage.get(LOGO_KEY); }catch(e){ r = null; }
+    try{ r = await store.get(LOGO_KEY); }catch(e){ r = null; }
     if(!r || !r.value){
       try{
-        const old = await window.storage.get(LEGACY_LOGO_KEY);
-        if(old && old.value){ r = old; await window.storage.set(LOGO_KEY, old.value); }
+        const old = await store.get(LEGACY_LOGO_KEY);
+        if(old && old.value){ r = old; await store.set(LOGO_KEY, old.value); }
       }catch(e){}
     }
     if(r && r.value) LOGO = r.value === "none" ? null : r.value;
@@ -3434,7 +3468,7 @@ async function loadLogo(){
 async function persistLogo(d){
   LOGO = d;
   try{
-    await window.storage.set(LOGO_KEY, d || "none");
+    await store.set(LOGO_KEY, d || "none");
   }catch(e){ toast("Couldn't save the logo"); }
 }
 function processLogo(src, threshold, cb){
