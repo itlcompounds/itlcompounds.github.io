@@ -292,7 +292,7 @@ input[type=file]{padding:8px;font-size:13px}
     <div id="poList"></div>
   </div>
   <div class="sect">
-    <div class="eyebrow"><span>Lots on hand</span><span style="display:flex;gap:6px"><button class="pill" id="zeroStockBtn" style="color:var(--alert)">Zero stock</button><button class="pill" id="dupLotBtn">Duplicates</button><button class="pill" id="addLotBtn">+ Manual lot</button></span></div>
+    <div class="eyebrow"><span>Lots on hand</span><span style="display:flex;gap:6px"><button class="pill" id="healthBtn">Health</button><button class="pill" id="zeroStockBtn" style="color:var(--alert)">Zero stock</button><button class="pill" id="dupLotBtn">Duplicates</button><button class="pill" id="addLotBtn">+ Manual lot</button></span></div>
     <p class="hint" style="margin-top:0">Every fee you paid to get a lot on the shelf divides across the vials you filled from it. That per-vial number is your true cost.</p>
     <div id="lotList"></div>
   </div>
@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-2026-ee41b7";
+const BUILD = "20260803-2035-e6f549";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -5947,6 +5947,7 @@ on("addPOBtn", "click", newPOSheet);
 on("addLotBtn", "click", newLotSheet);
 on("dupLotBtn", "click", dupLotsSheet);
 on("zeroStockBtn", "click", zeroStockSheet);
+on("healthBtn", "click", stockHealthSheet);
 function zeroStockSheet(){
   const nLots = S.lots.length, nTx = S.txns.length;
   const nQty = S.items.filter(i => num(i.qty) > 0).length;
@@ -5962,6 +5963,50 @@ function zeroStockSheet(){
     });
 }
 
+function stockHealthSheet(){
+  // Three ledgers must agree per product: item.qty, sum of lot remainings,
+  // and the movement history (ins minus outs). The movements are the audit
+  // trail — profit is computed from them — so they are the referee.
+  const report = [];
+  S.items.forEach(i => {
+    const lots = S.lots.filter(l => l.itemId === i.id);
+    const lotSum = lots.reduce((a,l) => a + num(l.remaining), 0);
+    const filled = lots.reduce((a,l) => a + num(l.vials), 0);
+    const outs = S.txns.filter(t => t.itemId === i.id && t.dir === "out").reduce((a,t)=>a+num(t.qty),0);
+    const manual = S.txns.filter(t => t.itemId === i.id && t.dir === "in" && !t.lotId).reduce((a,t)=>a+num(t.qty),0);
+    const scraps = S.txns.filter(t => t.itemId === i.id && t.dir === "scrap").reduce((a,t)=>a+num(t.qty),0);
+    const truth = Math.max(0, filled + manual - outs - scraps);
+    if(num(i.qty) !== truth || lotSum !== truth || lots.some(l => num(l.remaining) > num(l.vials)))
+      report.push({item:i, lots, lotSum, truth});
+  });
+  if(!report.length){ toast("Stock, lots and history all agree"); return; }
+  window.__itlH = window.__itlH || {};
+  window.__itlH['hc_fix'] = () => {
+    report.forEach(r => {
+      // Rebuild each lot's remaining from its own fills minus its own outs.
+      r.lots.forEach(l => {
+        const taken = S.txns.filter(t => t.lotId === l.id && t.dir === "out").reduce((a,t)=>a+num(t.qty),0)
+                    + S.txns.filter(t => t.lotId === l.id && t.dir === "scrap").reduce((a,t)=>a+num(t.qty),0);
+        l.remaining = Math.max(0, Math.min(num(l.vials), num(l.vials) - taken));
+      });
+      r.item.qty = r.truth;
+    });
+    save(); renderAll(); closeSheet();
+    toast(report.length+" product"+(report.length===1?"":"s")+" reconciled to the ledger");
+  };
+  sheet('<h2>Stock health</h2>'+
+    '<p class="hint" style="margin-top:-6px">These disagree with the movement history. Sales and profit are untouched by fixing this \u2014 only shelf counters change.</p>'+
+    report.map(r =>
+      '<div class="row"><span class="nm"><b>'+esc(r.item.name)+'</b>'+
+      '<small>product says '+num(r.item.qty)+' \u00b7 lots say '+r.lotSum+' \u00b7 history says '+r.truth+'</small></span>'+
+      '<span class="rt"><b>\u2192 '+r.truth+'</b></span></div>').join("")+
+    '<button class="btn pri full" style="margin:10px 0 8px" id="hc_fix">Fix to match history</button>'+
+    '<div class="sheetact"><button class="btn full" onclick="closeSheet()">Not now</button></div>');
+  setTimeout(() => {
+    const b = document.getElementById('hc_fix');
+    if(b) b.onclick = window.__itlH['hc_fix'];
+  }, 0);
+}
 function dupLotsSheet(){
   const byItem = {};
   S.lots.forEach(l => { (byItem[l.itemId]=byItem[l.itemId]||[]).push(l); });
