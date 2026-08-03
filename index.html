@@ -265,7 +265,7 @@ input[type=file]{padding:8px;font-size:13px}
 <!-- ================= STOCK ================= -->
 <section class="view" id="v-stock">
   <div class="sect" style="margin-top:4px">
-    <div class="eyebrow"><span>Products</span><span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="pill" id="demandBtn">Demand</button><button class="pill" id="repriceBtn">Reprice</button><button class="pill" id="tidyBtn">Tidy</button><button class="pill brand" id="addItemBtn">+ New product</button></span></div>
+    <div class="eyebrow"><span>Products</span><span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="pill" id="demandBtn">Demand</button><button class="pill" id="reorderBtn">Reorder</button><button class="pill" id="repriceBtn">Reprice</button><button class="pill" id="tidyBtn">Tidy</button><button class="pill brand" id="addItemBtn">+ New product</button></span></div>
     <input id="stockSearchBox" type="search" placeholder="Search products…" oninput="stockSearch(this.value)" style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px">
     <div id="stockList"></div>
   </div>
@@ -295,7 +295,7 @@ input[type=file]{padding:8px;font-size:13px}
 <!-- ================= ORDERS ================= -->
 <section class="view" id="v-orders">
   <div class="sect" style="margin-top:4px">
-    <div class="eyebrow"><span>Orders</span><span style="display:flex;gap:6px"><button class="pill" id="shipSetupBtn">Carrier setup</button><button class="pill" id="addQuoteBtn">+ Quote</button><button class="pill brand" id="addOrderBtn">+ New order</button></span></div>
+    <div class="eyebrow"><span>Orders</span><span style="display:flex;gap:6px"><button class="pill" id="reviewBtn">Review</button><button class="pill" id="shipSetupBtn">Carrier setup</button><button class="pill" id="addQuoteBtn">+ Quote</button><button class="pill brand" id="addOrderBtn">+ New order</button></span></div>
     <div id="orderList"></div>
     <div id="queueList"></div>
     <div id="quoteList"></div>
@@ -323,7 +323,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1113-c45318";
+const BUILD = "20260803-1129-272658";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1372,6 +1372,29 @@ function saveNewCust(backOrder){
   if(backOrder) openOrder(backOrder); else closeSheet();
   toast(c.name + " added");
 }
+function repeatLastOrder(custId){
+  const c = S.customers.find(x => x.id === custId); if(!c) return;
+  const prev = S.orders.slice().reverse().find(o => o.customerId === custId && (o.lines||[]).length);
+  if(!prev){ toast("No previous order with items for "+c.name); return; }
+  const o = {id:uid("o"), ref:(c.name.split(" ")[0]||"Order")+" \u00d7 repeat", created:Date.now(),
+             status:"open", lines:[], customerId:custId,
+             shipCharged:num(prev.shipCharged), shipCost:0, carrier:prev.carrier||"", tracking:""};
+  S.orders.push(o);
+  const tier = tierOf(custId);
+  const skipped = [];
+  prev.lines.forEach(l => {
+    const it = S.items.find(i => i.id === l.itemId);
+    if(!it){ skipped.push("a deleted product"); return; }
+    const mult = num(l.pack) || 1;
+    if(!moveOut(it, num(l.qty), o.id, mult)){ skipped.push(it.name+" ("+num(it.qty)+" on hand)"); return; }
+    const sell = priceFor(it, tier, mult);
+    o.lines.push({itemId:it.id, qty:num(l.qty), price:sell, pack:mult});
+  });
+  save(); renderAll();
+  if(skipped.length) toast("Repeated, but short on: "+skipped.join(", "));
+  else toast("Order repeated at current prices");
+  openOrder(o.id);
+}
 function openCust(id){
   const c = S.customers.find(x => x.id === id); if(!c) return;
   const orders = S.orders.filter(o => o.customerId === id);
@@ -1381,6 +1404,7 @@ function openCust(id){
       '<div><div class="k">Orders</div><div class="v">'+orders.length+'</div></div>'+
       '<div><div class="k">Spent</div><div class="v">'+money(spend)+'</div></div>'+
       '<div><div class="k">Last</div><div class="v">'+(orders.length?new Date(orders[orders.length-1].created).toLocaleDateString(undefined,{month:"short",day:"numeric"}):"—")+'</div></div></div>'+
+    '<button class="btn full" style="margin-bottom:8px;border-color:#28503A;color:var(--ok)" onclick="repeatLastOrder(\''+id+'\')">Repeat their last order</button>'+
     (c.phone ? '<a class="btn full" style="margin-bottom:8px" href="'+waLink(c.phone,"")+'" target="_blank" rel="noopener">WhatsApp them</a>' : '')+
     '<div class="sheetact"><button class="btn" onclick="closeSheet()">Close</button>'+
     '<button class="btn pri" onclick="saveCust(\''+id+'\')">Save</button></div>'+
@@ -4169,6 +4193,57 @@ function removeLine(oid, ix){
 }
 
 /* ============ export ============ */
+let reviewPeriod = "week";
+function periodWindow(kind){
+  const now = new Date();
+  if(kind === "week"){
+    const start = new Date(now); start.setDate(now.getDate() - ((now.getDay()+6)%7)); start.setHours(0,0,0,0);
+    return {from:start.getTime(), to:Date.now(), label:"This week"};
+  }
+  if(kind === "month"){
+    return {from:new Date(now.getFullYear(), now.getMonth(), 1).getTime(), to:Date.now(), label:"This month"};
+  }
+  const from = new Date(now.getFullYear(), now.getMonth()-1, 1).getTime();
+  const to = new Date(now.getFullYear(), now.getMonth(), 1).getTime() - 1;
+  return {from, to, label:"Last month"};
+}
+function periodReviewSheet(kind){
+  reviewPeriod = kind || reviewPeriod;
+  const w = periodWindow(reviewPeriod);
+  const outs = S.txns.filter(t => t.dir === "out" && t.ts >= w.from && t.ts <= w.to);
+  const scraps = S.txns.filter(t => t.dir === "scrap" && t.ts >= w.from && t.ts <= w.to);
+  let rev = 0, cost = 0, vials = 0;
+  const byItem = {};
+  outs.forEach(t => {
+    rev += num(t.qty)*num(t.price); cost += num(t.qty)*num(t.cost); vials += num(t.qty);
+    const k = t.itemId; byItem[k] = byItem[k] || {qty:0, rev:0};
+    byItem[k].qty += num(t.qty); byItem[k].rev += num(t.qty)*num(t.price);
+  });
+  const writeoff = scraps.reduce((a,t) => a + num(t.qty)*num(t.cost), 0);
+  const orderIds = new Set(outs.map(t => t.orderId).filter(Boolean));
+  const openOrders = S.orders.filter(o => o.status !== "shipped").length;
+  const top = Object.entries(byItem).sort((a,b) => b[1].rev - a[1].rev).slice(0,5)
+    .map(([iid, d]) => {
+      const it = S.items.find(i => i.id === iid);
+      return '<div class="row"><span class="nm"><b>'+esc(it?it.name:"deleted")+'</b><small>'+d.qty+' vials</small></span>'+
+        '<span class="rt"><b>'+money(d.rev)+'</b></span></div>';
+    }).join("");
+  const tabs = [["week","Week"],["month","Month"],["lastmonth","Last month"]].map(([k,l]) =>
+    '<button aria-pressed="'+(reviewPeriod===k)+'" onclick="periodReviewSheet(\''+k+'\')">'+l+'</button>').join("");
+  sheet('<h2>Review \u00b7 '+w.label+'</h2>'+
+    '<div class="modebar" style="grid-template-columns:repeat(3,1fr);margin-bottom:10px">'+tabs+'</div>'+
+    '<div class="rcells" style="border:1px solid var(--line);border-radius:4px;margin-bottom:10px">'+
+      '<div><div class="k">Revenue</div><div class="v">'+money(rev)+'</div></div>'+
+      '<div><div class="k">Cost</div><div class="v">'+money(cost)+'</div></div>'+
+      '<div><div class="k">Profit</div><div class="v" style="color:'+((rev-cost-writeoff)<0?'var(--alert)':'var(--ok)')+'">'+money(rev-cost-writeoff)+'</div></div></div>'+
+    '<div class="rcells" style="border:1px solid var(--line);border-radius:4px;margin-bottom:10px">'+
+      '<div><div class="k">Vials out</div><div class="v">'+vials+'</div></div>'+
+      '<div><div class="k">Orders</div><div class="v">'+orderIds.size+'</div></div>'+
+      '<div><div class="k">Still open</div><div class="v">'+openOrders+'</div></div></div>'+
+    (writeoff ? '<p class="hint">Written off this period: <b style="color:var(--alert)">\u2212'+money(writeoff)+'</b></p>' : '')+
+    (top ? '<div class="eyebrow" style="margin:10px 0 6px">Top products</div>'+top : '<p class="hint">No sales in this period.</p>')+
+    '<div class="sheetact"><button class="btn pri full" onclick="closeSheet()">Done</button></div>');
+}
 function tierSheet(){
   const t = profitByTier(), L = lossMTD();
   const row = (k) => '<div class="row"><span class="nm"><b>'+TIERS[k]+'</b><small>'+t[k].qty+' vials · '+
@@ -4965,6 +5040,64 @@ function demandRow(i){
   else { verdict = "balanced"; tone = "ok"; }
   return {rate, lead, cover, verdict, tone};
 }
+function cheapestVendorFor(itemId){
+  let best = null;
+  S.suppliers.forEach(sp => {
+    if(!Array.isArray(sp.prices)) return;
+    const hit = sp.prices.find(p => p.itemId === itemId);
+    if(hit && (best === null || num(hit.kitPrice) < num(best.price)))
+      best = {sup:sp, price:num(hit.kitPrice)};
+  });
+  return best;
+}
+function draftReorders(){
+  const low = S.items.filter(i => isStocked(i) && num(i.qty) <= num(i.reorder));
+  if(!low.length){ toast("Nothing is at or below its reorder point"); return; }
+  const groups = {};   // supId -> [{item, kits, price}]
+  const unpriced = [];
+  low.forEach(i => {
+    const best = cheapestVendorFor(i.id);
+    if(!best){ unpriced.push(i.name); return; }
+    const kits = Math.max(1, Math.round(orderQtyFor(i) / 10)) || 1;
+    (groups[best.sup.id] = groups[best.sup.id] || []).push({item:i, kits, price:best.price});
+  });
+  const supIds = Object.keys(groups);
+  if(!supIds.length){ toast("None of the low items have a vendor price"); return; }
+  const rows = supIds.map(sid => {
+    const sup = S.suppliers.find(x => x.id === sid);
+    const g = groups[sid];
+    const goods = g.reduce((a,x) => a + x.kits*x.price, 0);
+    const bid = 'rd_' + sid;
+    window.__itlH = window.__itlH || {};
+    window.__itlH[bid] = () => createDraftPO(sid, g);
+    return '<div style="margin-bottom:16px"><div class="eyebrow" style="margin-bottom:6px">'+esc(sup.name)+
+      ' \u00b7 '+g.length+' product'+(g.length===1?'':'s')+' \u00b7 goods '+money(goods)+
+      (goods > poCeiling() ? ' <span style="color:var(--alert)">over your '+money(poCeiling())+' ceiling \u2014 trim or split</span>' : '')+'</div>'+
+      g.map(x => '<div class="row"><span class="nm"><b>'+esc(x.item.name)+'</b><small>'+
+        num(x.item.qty)+' on hand \u00b7 reorder at '+num(x.item.reorder)+'</small></span>'+
+        '<span class="rt"><b>'+x.kits+' kit'+(x.kits===1?'':'s')+'</b>'+money(x.price)+'/kit</span></div>').join("")+
+      '<button id="'+bid+'" class="btn full" style="margin-top:6px">Create draft purchase for '+esc(sup.name)+'</button></div>';
+  }).join("");
+  sheet('<h2>Reorder draft</h2>'+
+    '<p class="hint">Everything at or below its reorder point, grouped by the cheapest vendor that sells it. Each button creates a draft purchase you can adjust and send.</p>'+
+    rows+
+    (unpriced.length ? '<p class="hint" style="color:var(--alert)">No vendor price: '+unpriced.map(esc).join(", ")+'</p>' : '')+
+    '<div class="sheetact"><button class="btn pri full" onclick="closeSheet()">Done</button></div>');
+  setTimeout(() => {
+    Object.keys(window.__itlH||{}).filter(k=>k.startsWith('rd_')).forEach(k=>{
+      const b = document.getElementById(k); if(b) b.onclick = window.__itlH[k];
+    });
+  }, 0);
+}
+function createDraftPO(supId, g){
+  const po = {id:uid("po"), supplierId:supId, status:"draft", created:Date.now(),
+              lines:g.map(x => ({itemId:x.item.id, kits:x.kits, kitPrice:x.price})),
+              shipping:0, fees:0, customs:0, other:0, discount:1};
+  if(typeof applyVendorTerms === "function") try{ applyVendorTerms(po, false); }catch(e){}
+  S.pos.push(po);
+  save(); renderAll(); closeSheet();
+  toast("Draft created"); openPO(po.id);
+}
 function demandSheet(){
   const rows = S.items.filter(i => isStocked(i) && (num(i.qty) > 0 || soldPerDay(i.id) > 0))
     .map(i => ({i, d:demandRow(i)}))
@@ -5354,6 +5487,7 @@ on("addItemBtn", "click", () => newItemSheet(""));
 on("tidyBtn", "click", tidySheet);
 on("repriceBtn", "click", repriceAllSheet);
 on("demandBtn", "click", demandSheet);
+on("reorderBtn", "click", draftReorders);
 on("addSupplyBtn", "click", newSupplySheet);
 on("addSupBtn", "click", newSupplierSheet);
 on("addPOBtn", "click", newPOSheet);
@@ -5410,6 +5544,7 @@ function dupLotsSheet(){
 on("addOrderBtn", "click", newOrderSheet);
 on("addQuoteBtn", "click", newQuote);
 on("addCustBtn", "click", () => newCustSheet(null));
+on("reviewBtn", "click", () => periodReviewSheet(reviewPeriod));
 on("shipSetupBtn", "click", carrierSetupSheet);
 on("exportBtn", "click", backupSheet);
 on("scanInput", "keydown", e => {
