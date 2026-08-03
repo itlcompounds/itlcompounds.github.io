@@ -323,7 +323,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1210-2089a9";
+const BUILD = "20260803-1219-03a0b5";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -3872,15 +3872,38 @@ function wrapVialHTML(i, st){
 
   // A blend goes in the name as "BPC-157 / TB-500" and splits onto two lines.
   const parts = i.name.split(/\s*\/\s*/).filter(Boolean);
-  const nameLines = parts.length > 1 ? parts : [composeName(i.name, i.dose, "mg")];
+  let nameLines = parts.length > 1 ? parts : [composeName(i.name, i.dose, "mg")];
 
-  // The name gets the full width of the label so it can be the largest thing
-  // on it. Size is fitted to the longest line rather than fixed, so a short
-  // name grows and a blend shrinks instead of overflowing.
+  // Real Helvetica/Arial Bold character widths (Adobe core metrics, /1000 em).
+  // Measuring instead of guessing is what stops long names from clipping.
+  const HB = {" ":278,"!":333,"%":889,"&":722,"(":333,")":333,"+":584,",":278,"-":333,".":278,"/":278,
+    "0":556,"1":556,"2":556,"3":556,"4":556,"5":556,"6":556,"7":556,"8":556,"9":556,":":333,
+    "A":722,"B":722,"C":722,"D":722,"E":667,"F":611,"G":778,"H":722,"I":278,"J":556,"K":722,"L":611,
+    "M":833,"N":722,"O":778,"P":667,"Q":778,"R":722,"S":667,"T":611,"U":722,"V":667,"W":944,"X":667,
+    "Y":667,"Z":611,"a":556,"b":611,"c":556,"d":611,"e":556,"f":333,"g":611,"h":611,"i":278,"j":278,
+    "k":556,"l":278,"m":889,"n":611,"o":611,"p":611,"q":611,"r":389,"s":556,"t":333,"u":611,"v":556,
+    "w":778,"x":556,"y":556,"z":500};
+  const textEm = t => { let w = 0; for(const ch of String(t)) w += (HB[ch]||611); return w/1000; };
   const nameH = H * 0.36;
-  const longest = nameLines.reduce((a,b) => a.length > b.length ? a : b, "").length || 1;
-  const fitted = W / (longest * 0.52);
-  const nameSize = Math.min(nameH * (nameLines.length > 1 ? 0.46 : 0.88), fitted);
+  const capFor = n => nameH * (n === 1 ? 0.88 : 0.92 / n);
+  const fitFor = lines => {
+    const widest = lines.reduce((a,b) => textEm(a) > textEm(b) ? a : b, " ");
+    return Math.min(capFor(lines.length), (W - 0.4) / textEm(widest));
+  };
+  if(nameLines.length === 1){
+    const one = fitFor(nameLines);
+    const t = nameLines[0];
+    if(one < nameH * 0.5 && t.indexOf(" ") > 0){
+      let best = -1, bestScore = 1e9;
+      for(let ix = t.indexOf(" "); ix > 0; ix = t.indexOf(" ", ix+1)){
+        const score = Math.max(textEm(t.slice(0,ix)), textEm(t.slice(ix+1)));
+        if(score < bestScore){ bestScore = score; best = ix; }
+      }
+      const two = [t.slice(0, best), t.slice(best+1)];
+      if(fitFor(two) > one) nameLines = two;
+    }
+  }
+  const nameSize = fitFor(nameLines);
 
   const lotSize = H * 0.10;
   const rest = H - nameH - 0.5;          // bottom text row removed — the QR is the code
