@@ -264,6 +264,7 @@ input[type=file]{padding:8px;font-size:13px}
 <section class="view" id="v-stock">
   <div class="sect" style="margin-top:4px">
     <div class="eyebrow"><span>Products</span><span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="pill" id="demandBtn">Demand</button><button class="pill" id="repriceBtn">Reprice</button><button class="pill" id="tidyBtn">Tidy</button><button class="pill brand" id="addItemBtn">+ New product</button></span></div>
+    <input id="stockSearchBox" type="search" placeholder="Search products…" oninput="stockSearch(this.value)" style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px">
     <div id="stockList"></div>
   </div>
   <div class="sect">
@@ -320,7 +321,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1022-bb161f";
+const BUILD = "20260803-1054-968ece";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -372,6 +373,7 @@ function on(id, ev, fn){
   if(el) el.addEventListener(ev, fn);
   else console.warn("no element #" + id + " to bind " + ev);
 }
+const itemsAZ = () => S.items.slice().sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""),undefined,{numeric:true}));
 const uid = p => p + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
 const money = n => (n<0?"-":"") + "$" + Math.abs(n||0).toFixed(2);
 const esc = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -1674,12 +1676,18 @@ function poLinesRefresh(filter){
   const prev = {};
   document.querySelectorAll(".po_k").forEach(el=>{ if(num(el.value)>0) prev[el.dataset.item]=el.value; });
   $("po_lines").innerHTML = visible.map(i => {
-    const p = vendorPriceFor(sup, i.id);
+    const e = vendorEntryFor(sup, i.id);
+    const p = e ? num(e.kitPrice) : null;
     const short = num(i.qty) <= num(i.reorder);
     const v = prev[i.id]||"0";
+    const info = p != null
+      ? (e.cat ? esc(e.cat)+' \u00b7 ' : '') + money(p) + '/kit'
+      : (() => { const o = bestOtherVendor(i.id, sup);
+                 return o ? 'not on this vendor \u00b7 '+esc(o.sup.name)+' has it at '+money(o.price)
+                          : 'no vendor price'; })();
     return '<div class="row'+(short?' low':'')+(num(v)>0?' po_row_active':'')+' po_row" id="por_'+i.id+'">'+
       '<span class="nm"><b>'+esc(i.name)+(short?' <span class="pill alert">low</span>':'')+'</b>'+
-      '<small>'+num(i.qty)+' on hand'+(p!=null?' · '+money(p)+'/kit':' · no price on file')+'</small></span>'+
+      '<small>'+num(i.qty)+' on hand \u00b7 '+info+'</small></span>'+
       '<button class="pill" style="margin-left:4px;flex:none" onclick="openItem(\''+i.id+'\')">Edit</button>'+
       '<span style="width:64px;flex:none"><input class="num po_k" data-item="'+i.id+'" data-price="'+(p||0)+
       '" type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"></span></div>';
@@ -2376,7 +2384,7 @@ function reviewSheet(){
   const list = visible.length ? visible.map(([r,ix]) => {
     const price = r.nums[Math.min(col, r.nums.length-1)];
     const opts = '<option value="">— create as new —</option>' +
-      S.items.map(i => '<option value="'+i.id+'"'+(r.itemId===i.id?' selected':'')+'>'+esc(i.name)+'</option>').join("");
+      itemsAZ().map(i => '<option value="'+i.id+'"'+(r.itemId===i.id?' selected':'')+'>'+esc(i.name)+'</option>').join("");
     const shown = review.withDose === false ? (r.baseName||r.name)
                 : composeName(r.baseName||r.name, r.dose, r.unit);
     const meta = [r.cat ? esc(r.cat) : "", r.dose ? r.dose+(r.unit||"") : "",
@@ -2497,6 +2505,20 @@ function matchItem(name){
 }
 // What a VENDOR charges us. Distinct from priceFor(), which is what we charge
 // a customer — two different questions that were sharing one name.
+function vendorEntryFor(supplierId, itemId){
+  const s = S.suppliers.find(x => x.id === supplierId);
+  if(!s || !Array.isArray(s.prices)) return null;
+  return s.prices.find(p => p.itemId === itemId) || null;
+}
+function bestOtherVendor(itemId, excludeSupId){
+  let best = null;
+  S.suppliers.forEach(sp => {
+    if(sp.id === excludeSupId || !Array.isArray(sp.prices)) return;
+    const hit = sp.prices.find(p => p.itemId === itemId);
+    if(hit && (best === null || num(hit.kitPrice) < num(best.price))) best = {sup:sp, price:num(hit.kitPrice)};
+  });
+  return best;
+}
 function vendorPriceFor(supplierId, itemId){
   const s = S.suppliers.find(x => x.id === supplierId);
   if(!s || !Array.isArray(s.prices)) return null;
@@ -2571,7 +2593,7 @@ function editPrice(supId, ix){
   const sup = S.suppliers.find(x => x.id === supId); if(!sup) return;
   const p = (sup.prices||[])[ix]; if(!p) return;
   const opts = '<option value="">— none —</option>' +
-    S.items.map(i => '<option value="'+i.id+'"'+(p.itemId===i.id?' selected':'')+'>'+esc(i.name)+'</option>').join("");
+    itemsAZ().map(i => '<option value="'+i.id+'"'+(p.itemId===i.id?' selected':'')+'>'+esc(i.name)+'</option>').join("");
   sheet('<h2>Edit price</h2>'+
     '<div class="field"><label>Name on their list</label><input id="ep_name" value="'+esc(p.name||"")+'"></div>'+
     '<div class="grid2"><div class="field"><label>Catalogue no. — used in the order message</label><input id="ep_cat" value="'+esc(p.cat||"")+'" placeholder="e.g. T10"></div>'+
@@ -3133,6 +3155,8 @@ function doDemote(){
   save(); renderAll(); tidySheet();
   toast(ids.length + " moved to catalogue");
 }
+let stockFilter = "";
+function stockSearch(v){ stockFilter = String(v||""); renderStock(); }
 function renderStock(){
   if(!S.items.length){
     $("stockList").innerHTML = '<div class="empty"><b>No products yet</b>Add a product, then log a bulk lot to give it a real cost.<div style="margin-top:12px"><button class="btn" onclick="newItemSheet(\'\')">Add first product</button></div></div>';
@@ -3144,9 +3168,13 @@ function renderStock(){
   const view = S.settings.stockView || "stocked";
   const nStock = S.items.filter(isStocked).length;
   const nCat = S.items.length - nStock;
-  const pool = view === "all" ? S.items
+  let pool = view === "all" ? S.items
              : view === "catalog" ? S.items.filter(i => !isStocked(i))
              : S.items.filter(isStocked);
+  const sf = stockFilter.trim().toLowerCase();
+  if(sf) pool = pool.filter(i => (i.name||"").toLowerCase().includes(sf) ||
+                                 (i.code||"").toLowerCase().includes(sf) ||
+                                 (i.bin||"").toLowerCase().includes(sf));
   const sorted = pool.slice().sort((a,b) => {
     if(mode === "low") return (num(a.qty)-num(a.reorder)) - (num(b.qty)-num(b.reorder));
     if(mode === "bin") return String(a.bin||"~~~").localeCompare(String(b.bin||"~~~"));
@@ -3946,7 +3974,7 @@ function printProductLabel(id, kind, stockKey){
 /* ---- lots ---- */
 function lotFields(l){
   l = l || {};
-  const opts = S.items.map(i => '<option value="'+i.id+'"'+(l.itemId===i.id?' selected':'')+'>'+esc(i.name)+'</option>').join("");
+  const opts = itemsAZ().map(i => '<option value="'+i.id+'"'+(l.itemId===i.id?' selected':'')+'>'+esc(i.name)+'</option>').join("");
   return '<div class="grid2"><div class="field"><label>Lot code</label><input id="l_code" value="'+esc(l.code||("L-"+new Date().toISOString().slice(2,7).replace("-","")))+'"></div>'+
     '<div class="field"><label>Product</label><select id="l_item">'+opts+'</select></div></div>'+
     '<div class="grid2"><div class="field"><label>Vendor for this lot</label><select id="l_sup">'+supplierOptions(l.supplierId||"")+'</select></div>'+
@@ -4659,7 +4687,8 @@ function renderQuoteFind(){
   const f = String(quoteFilter||"").trim().toLowerCase();
   if(!f){ box.innerHTML = '<p class="hint">Search by name or code.</p>'; return; }
   const hits = S.items.filter(i =>
-    (i.name||"").toLowerCase().indexOf(f) >= 0 || (i.code||"").toLowerCase().indexOf(f) >= 0).slice(0,25);
+    (i.name||"").toLowerCase().indexOf(f) >= 0 || (i.code||"").toLowerCase().indexOf(f) >= 0)
+    .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""),undefined,{numeric:true})).slice(0,25);
   box.innerHTML = hits.length ? hits.map(i =>
     (() => {
       const cc = quoteCost(i.id);
@@ -5347,7 +5376,8 @@ function zeroStockSheet(){
 function dupLotsSheet(){
   const byItem = {};
   S.lots.forEach(l => { (byItem[l.itemId]=byItem[l.itemId]||[]).push(l); });
-  const dupes = Object.entries(byItem).filter(([,ls])=>ls.length>1);
+  const dupes = Object.entries(byItem).filter(([,ls])=>ls.length>1)
+    .sort((a,b)=>{ const na=(S.items.find(i=>i.id===a[0])||{}).name||''; const nb=(S.items.find(i=>i.id===b[0])||{}).name||''; return na.localeCompare(nb); });
   if(!dupes.length){ toast("No duplicate lots found"); return; }
   const rows = dupes.map(([itemId, ls]) => {
     const it = S.items.find(i=>i.id===itemId);
