@@ -322,7 +322,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-0923-6e4dd9";
+const BUILD = "20260803-0947-708c08";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -331,6 +331,16 @@ const BUILD = "20260803-0923-6e4dd9";
  * quota will throw, and a storage failure must never take the app down —
  * without it the app still runs, it just leans entirely on sync.
  */
+function __itlRun(fn){
+  if(typeof fn === 'function'){ fn(); return; }
+  // Parse "funcName('arg')" or "funcName()" from the string
+  const m = String(fn).match(/^\s*(\w+)\s*\(\s*[\'\"\u201c]?([^\'\"\'\u201d]*?)[\'\"\u201d]?\s*\)\s*;?\s*$/);
+  if(m && typeof window[m[1]] === 'function'){
+    window[m[1]](m[2] || undefined);
+  } else {
+    console.error('__itlRun: could not dispatch', fn);
+  }
+}
 const store = (function(){
   let ok = false;
   try{
@@ -751,7 +761,7 @@ function openSupply(id){
     '<button class="btn full" style="margin:6px 0;border-color:#28503A;color:var(--ok)" onclick="messageSheet(\''+(s.supplierId||"")+'\',[findThing(\''+s.id+'\')])">WhatsApp a restock request</button>'+
     '<div class="sheetact"><button class="btn" onclick="closeSheet()">Close</button>'+
     '<button class="btn pri" onclick="saveSupply(\''+s.id+'\')">Save</button></div>'+
-    dangerZone("Delete supply", "confirmDelete(\'Delete '+esc(s.name)+'?\',\'Its count and reorder point go with it.\',\'deleteSupply(&quot;'+s.id+'&quot;)\',\'openSupply(&quot;'+s.id+'&quot;)\')"));
+    dangerZone("Delete supply", () => confirmDelete("Delete "+esc(s.name)+"?","Its count and reorder point go with it.", () => deleteSupply(s.id), () => openSupply(s.id))));
 }
 function saveSupply(id){
   const s = S.supplies.find(x => x.id === id); if(!s) return;
@@ -3319,28 +3329,30 @@ function wireFilePicker(id, cb){
 // the Save/Back row — Back on a sub-sheet sits exactly where Delete sits on
 // the parent, so a double tap used to be enough to lose a vendor.
 function dangerZone(label, fn){
-  const runFn = typeof fn === 'function' ? fn : () => new Function(fn)();
-  const id = 'dz_' + Math.random().toString(36).slice(2);
-  requestAnimationFrame(() => {
-    const b = document.getElementById(id);
-    if(b) b.onclick = runFn;
-  });
+  const bid = 'dz_' + Math.random().toString(36).slice(2,10);
+  window.__itlHandlers = window.__itlHandlers || {};
+  window.__itlHandlers[bid] = fn;
+  setTimeout(() => {
+    const b = document.getElementById(bid);
+    if(b) b.onclick = () => __itlRun(window.__itlHandlers[bid]);
+  }, 0);
   return '<div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line)">'+
-    '<button id="'+id+'" class="btn warn full">'+label+'</button></div>';
+    '<button id="'+bid+'" class="btn warn full">'+label+'</button></div>';
 }
 function confirmDelete(title, detail, fn, backFn){
-  const runFn = typeof fn === 'function' ? fn : () => new Function(fn)();
-  const runBack = backFn ? (typeof backFn === 'function' ? backFn : () => new Function(backFn)()) : closeSheet;
+  window.__itlHandlers = window.__itlHandlers || {};
+  window.__itlHandlers['cdFn'] = fn;
+  window.__itlHandlers['cdBack'] = backFn || closeSheet;
   sheet('<h2>'+title+'</h2>'+
     '<p class="hint">'+detail+'</p>'+
     '<button class="btn pri full" style="margin-bottom:8px" id="cdKeep">Keep it</button>'+
     '<div class="sheetact"><button class="btn warn" id="cdDel">Delete anyway</button></div>');
-  requestAnimationFrame(() => {
+  setTimeout(() => {
     const k = document.getElementById('cdKeep');
     const d = document.getElementById('cdDel');
-    if(k) k.onclick = runBack;
-    if(d) d.onclick = runFn;
-  });
+    if(k) k.onclick = () => __itlRun(window.__itlHandlers['cdBack']);
+    if(d) d.onclick = () => __itlRun(window.__itlHandlers['cdFn']);
+  }, 0);
 }
 function sheet(html){
   const panel = $("sheetPanel");
@@ -4596,7 +4608,7 @@ function openQuote(id){
     '<button class="btn full" style="margin-bottom:8px;border-color:#28503A;color:var(--ok)" onclick="saveQuote();quoteToOrder()">Turn into an order</button>'+
     '<div class="sheetact"><button class="btn" onclick="saveQuote();closeSheet();renderAll()">Close</button>'+
     '<button class="btn pri" onclick="saveQuote();closeSheet();renderAll()">Save</button></div>'+
-    dangerZone("Delete quote", "confirmDelete(\'Delete this quote?\',\''+(q.lines||[]).length+' line(s) and the pricing you worked out.\',\'dropQuote()\',\'openQuote(&quot;'+q.id+'&quot;)\')"));
+    dangerZone("Delete quote", () => confirmDelete("Delete this quote?", (q.lines||[]).length+" line(s) and the pricing you worked out.", dropQuote, () => openQuote(q.id))));
   renderQuoteFind();
 }
 function renderQuoteFind(){
