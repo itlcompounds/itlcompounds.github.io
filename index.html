@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1331-5ef55c";
+const BUILD = "20260803-1908-5f8d7e";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1655,14 +1655,33 @@ function leadFor(supplierId){
   const d = num(s && s.leadDays);
   return d > 0 ? {days:d, measured:false} : null;
 }
+function poHistorySheet(){
+  const past = S.pos.filter(p => p.status === "received")
+    .sort((a,b) => num(b.receivedAt||b.created) - num(a.receivedAt||a.created)).slice(0,30);
+  if(!past.length){ toast("No received purchases yet"); return; }
+  sheet('<h2>Past purchases</h2>'+
+    '<p class="hint" style="margin-top:-6px">Received orders. Open one to fix a discount, add photos, or check what it landed at \u2014 reprices flow through to its lots.</p>'+
+    past.map(po => {
+      const sup = S.suppliers.find(x => x.id === po.supplierId);
+      const kits = (po.lines||[]).reduce((a,l)=>a+num(l.kits),0);
+      const when = po.receivedAt ? toDateInput(po.receivedAt) : "";
+      return '<button class="row" onclick="openPO(\''+po.id+'\')"><span class="nm"><b>'+
+        esc(sup?sup.name:"?")+' \u00b7 '+kits+' kit'+(kits===1?'':'s')+'</b>'+
+        '<small>received '+when+'</small></span>'+
+        '<span class="rt"><b>'+money(poLanded(po))+'</b></span></button>';
+    }).join("")+
+    '<div class="sheetact"><button class="btn pri full" onclick="closeSheet()">Done</button></div>');
+}
 function renderPOs(){
-  const cutoff = Date.now() - 30*86400000;
-  const open = S.pos.filter(p => p.status !== "received" ||
-                                 (p.receivedAt && p.receivedAt > cutoff));
+  const open = S.pos.filter(p => p.status !== "received");
+  const past = S.pos.filter(p => p.status === "received");
+  const histLink = past.length
+    ? '<div style="text-align:center;margin-top:6px"><button class="pill" onclick="poHistorySheet()">Past purchases \u00b7 '+past.length+'</button></div>'
+    : "";
   if(!open.length){
     $("poList").innerHTML = '<div class="empty" style="padding:16px"><b>Nothing on order</b>'+
       'Track an order from the moment you send it on WhatsApp, so money in transit is visible.'+
-      '<div style="margin-top:12px"><button class="btn" onclick="newPOSheet()">Start a purchase</button></div></div>';
+      '<div style="margin-top:12px"><button class="btn" onclick="newPOSheet()">Start a purchase</button></div></div>' + histLink;
     return;
   }
   $("poList").innerHTML = open.slice().reverse().map(po => {
@@ -1679,7 +1698,7 @@ function renderPOs(){
       '<small><span style="display:inline-flex;gap:3px;vertical-align:middle;margin-right:6px">'+dots+'</span>'+
       esc(PO_LABEL[po.status]||po.status)+' · '+when+'</small></span>'+
       '<span class="rt"><b>'+money(poLanded(po))+'</b>'+poVials(po)+' vials</span></button>';
-  }).join("");
+  }).join("") + histLink;
 }
 function newPOSheet(){
   if(!S.suppliers.length){ toast("Add a supplier first"); switchTab("stock"); return; }
@@ -2868,23 +2887,33 @@ function packsFor(i){
 function resolveCode(codeRaw){
   const c = String(codeRaw||"").trim().toUpperCase();
   if(!c) return null;
+  // Imported codes can collide (name truncated to 8 chars + dose), so collect
+  // every match and let the picker disambiguate instead of trusting list order.
+  const hits = [];
+  const add = h => { if(!hits.some(x => x.item.id === h.item.id)) hits.push(h); };
   for(const i of S.items){
-    for(const p of packsFor(i)) if(p.code.toUpperCase() === c) return {item:i, qty:num(p.qty)||1, packCode:p.code};
-  }
-  for(const i of S.items){
-    if((i.code||"").toUpperCase() === c) return {item:i, qty:1, packCode:i.code};
-  }
-  // Unknown suffix on a known base, e.g. someone printed BASE-05
-  const m = c.match(/^(.*)-(\d{1,3})$/);
-  if(m){
-    const base = m[1], q = parseInt(m[2],10);
-    const i = S.items.find(x => (x.code||"").toUpperCase() === base);
-    if(i && q > 0) return {item:i, qty:q, packCode:c};
+    for(const p of packsFor(i)) if(p.code.toUpperCase() === c) add({item:i, qty:num(p.qty)||1, packCode:p.code});
   }
   for(const i of S.items){
-    if(i.name.toUpperCase() === c) return {item:i, qty:1, packCode:i.code};
+    if((i.code||"").toUpperCase() === c) add({item:i, qty:1, packCode:i.code});
   }
-  return null;
+  if(!hits.length){
+    const m = c.match(/^(.*)-(\d{1,3})$/);
+    if(m){
+      const base = m[1], q = parseInt(m[2],10);
+      S.items.forEach(x => { if((x.code||"").toUpperCase() === base && q > 0) add({item:x, qty:q, packCode:c}); });
+    }
+  }
+  if(!hits.length){
+    for(const i of S.items){
+      if(i.name.toUpperCase() === c) add({item:i, qty:1, packCode:i.code});
+    }
+  }
+  if(!hits.length) return null;
+  if(hits.length === 1) return hits[0];
+  hits.sort((a,b) => (num(b.item.qty)>0) - (num(a.item.qty)>0) ||
+                     (a.item.name||"").localeCompare(b.item.name||""));
+  return {choices:hits};
 }
 function qrSvg(text){
   try{
@@ -2943,8 +2972,36 @@ function resetReadout(){
   $("rLot").textContent = "Scan a code or type it below.";
   $("rAlert").innerHTML = "";
 }
+function scanChoose(hits, headline){
+  window.__itlH = window.__itlH || {};
+  sheet('<h2>Which one?</h2>'+
+    '<p class="hint" style="margin-top:-6px">'+headline+'</p>'+
+    hits.map((h, ix) => {
+      const i = h.item, bid = 'sc_' + ix;
+      window.__itlH[bid] = () => {
+        closeSheet();
+        lastPack = h;
+        showItem(i, 0);
+        $("scanInput").value = "";
+        commit(i, h.qty);
+      };
+      return '<button class="row" id="'+bid+'"><span class="nm"><b>'+esc(i.name)+'</b>'+
+        '<small>'+esc(i.code||"")+' \u00b7 '+num(i.qty)+' on hand</small></span>'+
+        '<span class="rt"><b>'+money(num(i.price))+'</b></span></button>';
+    }).join("")+
+    '<div class="sheetact"><button class="btn full" onclick="closeSheet()">Cancel</button></div>');
+  setTimeout(() => {
+    Object.keys(window.__itlH).filter(k=>k.startsWith('sc_')).forEach(k=>{
+      const b = document.getElementById(k); if(b) b.onclick = window.__itlH[k];
+    });
+  }, 0);
+}
 function handleCode(code){
   const r = resolveCode(code);
+  if(r && r.choices){
+    scanChoose(r.choices, '"'+esc(code.trim())+'" is printed on '+r.choices.length+' products \u2014 the catalogue gave them the same code. Tap the one in your hand.');
+    return;
+  }
   if(r){
     lastPack = r;
     showItem(r.item, 0);
@@ -2967,28 +3024,8 @@ function handleCode(code){
     commit(hits[0], 1);
     return;
   }
-  window.__itlH = window.__itlH || {};
-  sheet('<h2>Which one?</h2>'+
-    '<p class="hint" style="margin-top:-6px">"'+esc(code.trim())+'" matches '+hits.length+' products. Tap the one you mean.</p>'+
-    hits.map((i, ix) => {
-      const bid = 'sc_' + ix;
-      window.__itlH[bid] = () => {
-        closeSheet();
-        lastPack = {item:i, qty:1, packCode:i.code};
-        showItem(i, 0);
-        $("scanInput").value = "";
-        commit(i, 1);
-      };
-      return '<button class="row" id="'+bid+'"><span class="nm"><b>'+esc(i.name)+'</b>'+
-        '<small>'+esc(i.code||"")+' \u00b7 '+num(i.qty)+' on hand</small></span>'+
-        '<span class="rt"><b>'+money(num(i.price))+'</b></span></button>';
-    }).join("")+
-    '<div class="sheetact"><button class="btn full" onclick="closeSheet()">Cancel</button></div>');
-  setTimeout(() => {
-    Object.keys(window.__itlH).filter(k=>k.startsWith('sc_')).forEach(k=>{
-      const b = document.getElementById(k); if(b) b.onclick = window.__itlH[k];
-    });
-  }, 0);
+  scanChoose(hits.map(i => ({item:i, qty:1, packCode:i.code})),
+    '"'+esc(code.trim())+'" matches '+hits.length+' products. Tap the one you mean.');
 }
 function commit(item, packQty){
   item = item || S.items.find(i => i.id === current);
