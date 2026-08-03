@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-2035-e6f549";
+const BUILD = "20260803-2044-ec4b32";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -5171,7 +5171,7 @@ function openQuote(id){
     const lead = cc.src && cc.src.lead;
     const detail = cc.estimated
       ? (cc.src ? '<span style="color:var(--brand)">'+esc(cc.src.sup.name)+'</span> '+money(c)+
-                  (lead ? ' · ~'+lead.days+'d'+(lead.measured?'':'*') : ' · lead unknown')
+                  ((lead && num(lead.days) > 0) ? ' · ~'+lead.days+'d'+(lead.measured?'':'*') : ' · lead unknown')
                 : '<span style="color:var(--alert)">no cost known</span>')
       : money(c)+' cost';
     return '<div class="row'+(short?' low':'')+'"><span class="nm" style="min-width:0"><b>'+esc(it?it.name:"?")+
@@ -5257,7 +5257,7 @@ function pickSource(ix){
         (o === opts[0] ? ' <span class="pill ok">cheapest</span>' : '')+
         (fastest && o === fastest && opts.length > 1 ? ' <span class="pill brand">fastest</span>' : '')+'</b>'+
         '<small>'+(o.cat?esc(o.cat)+' · ':'')+money(o.kit)+'/kit'+
-        (o.lead ? ' · ~'+o.lead.days+' days'+(o.lead.measured?' measured':' stated') : ' · lead time unknown')+'</small></span>'+
+        ((o.lead && num(o.lead.days) > 0) ? ' · ~'+o.lead.days+' days'+(o.lead.measured?' measured':' stated') : ' · lead time unknown')+'</small></span>'+
         '<span class="rt"><b>'+money(o.per)+'</b>per vial</span></button>';
     }).join("")+
     (opts.length > 1 ? '<p class="hint">Picking a slower, cheaper vendor changes the margin shown on the quote — and what you can promise on delivery.</p>' : '')+
