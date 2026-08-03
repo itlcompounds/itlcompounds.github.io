@@ -322,7 +322,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-0912-5a4472";
+const BUILD = "20260803-0923-6e4dd9";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -3319,13 +3319,14 @@ function wireFilePicker(id, cb){
 // the Save/Back row — Back on a sub-sheet sits exactly where Delete sits on
 // the parent, so a double tap used to be enough to lose a vendor.
 function dangerZone(label, fn){
-  // Small, muted, right-aligned. You should have to aim for it — prominence
-  // belongs to Save, not to the one action that cannot be undone.
-  return '<div style="margin-top:20px;padding-top:10px;border-top:1px solid var(--line);text-align:right">'+
-    '<button style="background:none;border:none;padding:6px 2px;font-family:var(--cond);text-transform:uppercase;'+
-    'letter-spacing:.12em;font-size:11px;color:var(--muted)" '+
-    'onmouseover="this.style.color=\'var(--alert)\'" onmouseout="this.style.color=\'var(--muted)\'" '+
-    'onclick="'+fn+'">'+label+'</button></div>';
+  const runFn = typeof fn === 'function' ? fn : () => new Function(fn)();
+  const id = 'dz_' + Math.random().toString(36).slice(2);
+  requestAnimationFrame(() => {
+    const b = document.getElementById(id);
+    if(b) b.onclick = runFn;
+  });
+  return '<div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line)">'+
+    '<button id="'+id+'" class="btn warn full">'+label+'</button></div>';
 }
 function confirmDelete(title, detail, fn, backFn){
   const runFn = typeof fn === 'function' ? fn : () => new Function(fn)();
@@ -3341,7 +3342,15 @@ function confirmDelete(title, detail, fn, backFn){
     if(d) d.onclick = runFn;
   });
 }
-function sheet(html){ $("sheetPanel").innerHTML = html; $("sheet").classList.add("on"); }
+function sheet(html){
+  const panel = $("sheetPanel");
+  panel.innerHTML = html;
+  // Move any delete button (dangerZone output) to the top, before the h2
+  const dz = panel.querySelector('[id^="dz_"]');
+  const h2 = panel.querySelector('h2');
+  if(dz && h2) panel.insertBefore(dz.parentNode, h2);
+  $("sheet").classList.add("on");
+}
 function closeSheet(){ $("sheet").classList.remove("on"); $("sheetPanel").innerHTML = ""; }
 let sheetLocked = false;   // set while a sheet holds unsaved work
 on("sheet", "click", e => {
