@@ -125,7 +125,13 @@ main{padding:var(--pad);max-width:620px;margin:0 auto}
   background:var(--slate);border:1px solid var(--line);border-radius:4px;margin-bottom:6px;width:100%;text-align:left;
 }
 .row.low{border-left:3px solid var(--alert)}
+.po_row{flex-wrap:wrap;row-gap:3px}
+.po_row .nm{flex:1 1 100%;min-width:0}
+.po_row .nm b{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.12}
 .po_row_active{background:rgba(59,130,246,.18) !important;border-left:4px solid var(--brand) !important;border-radius:6px;outline:2px solid var(--brand)}
+.po_row.row{display:block}
+.po_row .nm b{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.15}
+.po_ctl{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:4px}
 .po_row_active .nm b::before{content:"\2713  ";color:var(--brand);font-weight:700}
 .row .nm{flex:1;min-width:0}
 .row .nm b{font-family:var(--cond);font-weight:600;font-size:16px;letter-spacing:.02em;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -323,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1219-03a0b5";
+const BUILD = "20260803-1306-94e4c0";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1752,19 +1758,24 @@ function poLinesRefresh(filter){
     const p = e ? num(e.kitPrice) : null;
     const short = num(i.qty) <= num(i.reorder);
     const v = prev[i.id]||"0";
+    const anyCat = e && e.cat ? e.cat
+      : (() => { const o = bestOtherVendor(i.id, sup);
+                 const oe = o && o.sup.prices.find(x => x.itemId === i.id);
+                 return oe && oe.cat ? oe.cat : (i.code || ""); })();
     const info = p != null
-      ? (e.cat ? esc(e.cat)+' \u00b7 ' : '') + 'list ' + money(p)
+      ? 'list ' + money(p)
       : (() => { const o = bestOtherVendor(i.id, sup);
                  return o ? 'not on this vendor \u00b7 '+esc(o.sup.name)+' has it at '+money(o.price)
                           : 'no vendor price \u2014 type it'; })();
     return '<div class="row'+(short?' low':'')+(num(v)>0?' po_row_active':'')+' po_row" id="por_'+i.id+'">'+
       '<span class="nm"><b>'+esc(i.name)+(short?' <span class="pill alert">low</span>':'')+'</b>'+
-      '<small>'+num(i.qty)+' on hand \u00b7 '+info+'</small></span>'+
-      '<button class="pill" style="margin-left:4px;flex:none" onclick="openItem(\''+i.id+'\')">\u0045dit</button>'+
-      '<span style="width:74px;flex:none;margin-left:4px"><input class="num po_p" data-item="'+i.id+'" type="number" step="any" inputmode="decimal" '+
+      '<small><b>'+esc((e && e.cat) || i.code || "")+'</b> \u00b7 '+num(i.qty)+' on hand \u00b7 '+info+'</small></span>'+
+      '<span style="display:flex;gap:4px;align-items:center;margin-left:auto">'+
+      '<button class="pill" style="flex:none" onclick="openItem(\''+i.id+'\')">\u0045dit</button>'+
+      '<span style="width:74px;flex:none"><input class="num po_p" data-item="'+i.id+'" type="number" step="any" inputmode="decimal" '+
       'value="'+(prevP[i.id] != null ? prevP[i.id] : (p != null ? p : ""))+'" placeholder="$/kit" style="text-align:center;padding:6px"></span>'+
-      '<span style="width:58px;flex:none;margin-left:4px"><input class="num po_k" data-item="'+i.id+'" '+
-      'type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"></span></div>';
+      '<span style="width:58px;flex:none"><input class="num po_k" data-item="'+i.id+'" '+
+      'type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"></span></span></div>';
   }).join("") + (lead ? '<p class="hint">Past orders from this vendor landed in about '+lead+' days.</p>' : '');
   document.querySelectorAll(".po_k").forEach(el => el.addEventListener("input", function(){
     poLiveTotal();
