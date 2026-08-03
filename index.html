@@ -283,7 +283,7 @@ input[type=file]{padding:8px;font-size:13px}
     <div id="poList"></div>
   </div>
   <div class="sect">
-    <div class="eyebrow"><span>Lots on hand</span><span style="display:flex;gap:6px"><button class="pill" id="dupLotBtn">Duplicates</button><button class="pill" id="addLotBtn">+ Manual lot</button></span></div>
+    <div class="eyebrow"><span>Lots on hand</span><span style="display:flex;gap:6px"><button class="pill" id="zeroStockBtn" style="color:var(--alert)">Zero stock</button><button class="pill" id="dupLotBtn">Duplicates</button><button class="pill" id="addLotBtn">+ Manual lot</button></span></div>
     <p class="hint" style="margin-top:0">Every fee you paid to get a lot on the shelf divides across the vials you filled from it. That per-vial number is your true cost.</p>
     <div id="lotList"></div>
   </div>
@@ -320,7 +320,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1009-6c1d9d";
+const BUILD = "20260803-1022-bb161f";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1736,7 +1736,8 @@ function openPO(id){
     const it = S.items.find(x => x.id === l.itemId);
     return '<div class="row"><span class="nm"><b>'+esc(it?it.name:"?")+'</b><small>'+
       l.kits+' kit'+(l.kits===1?'':'s')+' × 10 = '+(l.kits*10)+' vials</small></span>'+
-      '<span class="rt"><b>'+money(num(l.kits)*num(l.kitPrice))+'</b>'+money(num(l.kitPrice))+'/kit</span></div>';
+      '<span class="rt"><b>'+money(num(l.kits)*num(l.kitPrice))+'</b>'+money(num(l.kitPrice))+'/kit</span>'+
+      '<button class="pill" style="margin-left:6px;flex:none;color:var(--alert)" onclick="removePOLine(\''+id+'\','+i+')">Remove</button></div>';
   }).join("");
 
   sheet('<h2>'+esc(s?s.name:"Purchase")+'</h2>'+
@@ -1810,6 +1811,13 @@ function askDeletePO(id){
     money(poLanded(po))+" of order history goes, including the lead time it contributes to reorder points."+
     (lots ? " The "+lots+" lot"+(lots===1?"":"s")+" it created stay, but lose their link back." : ""),
     () => deletePO(id), () => openPO(id));
+}
+function removePOLine(id, ix){
+  const po = S.pos.find(x => x.id === id); if(!po) return;
+  if(!po.lines[ix]) return;
+  po.lines.splice(ix, 1);
+  save(); renderAll(); openPO(id);
+  toast("Line removed");
 }
 function deletePO(id){
   S.pos = S.pos.filter(x => x.id !== id); save(); closeSheet(); renderAll(); toast("Deleted");
@@ -3314,12 +3322,15 @@ function wireFilePicker(id, cb){
 // the Save/Back row — Back on a sub-sheet sits exactly where Delete sits on
 // the parent, so a double tap used to be enough to lose a vendor.
 function dangerZone(label, fn){
+  // Small, muted, bottom-right — you should have to aim for it. Handler is
+  // bound directly (not an onclick string), which is why it works.
   const bid = 'dz_' + Math.random().toString(36).slice(2,10);
   window.__itlH = window.__itlH || {};
   window.__itlH[bid] = fn;
   setTimeout(() => { const b = document.getElementById(bid); if(b) b.onclick = window.__itlH[bid]; }, 0);
-  return '<div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line)">'+
-    '<button id="'+bid+'" class="btn warn full">'+label+'</button></div>';
+  return '<div style="margin-top:20px;padding-top:10px;border-top:1px solid var(--line);text-align:right">'+
+    '<button id="'+bid+'" style="background:none;border:none;padding:6px 2px;font-family:var(--cond);text-transform:uppercase;'+
+    'letter-spacing:.12em;font-size:11px;color:var(--muted);cursor:pointer">'+label+'</button></div>';
 }
 function confirmDelete(title, detail, fn, backFn){
   window.__itlH = window.__itlH || {};
@@ -3341,14 +3352,7 @@ function confirmDelete(title, detail, fn, backFn){
     if(d) d.onclick = window.__itlH['cdFn'];
   }, 0);
 }
-function sheet(html){
-  const panel = $("sheetPanel");
-  panel.innerHTML = html;
-  const dz = panel.querySelector('[id^="dz_"]');
-  const h2 = panel.querySelector('h2');
-  if(dz && h2) panel.insertBefore(dz.parentNode, h2);
-  $("sheet").classList.add("on");
-}
+function sheet(html){ $("sheetPanel").innerHTML = html; $("sheet").classList.add("on"); }
 function closeSheet(){ $("sheet").classList.remove("on"); $("sheetPanel").innerHTML = ""; }
 let sheetLocked = false;   // set while a sheet holds unsaved work
 on("sheet", "click", e => {
@@ -3384,6 +3388,52 @@ function saveNewItem(){
 }
 
 let curItem = null;
+function recordSaleSheet(itemId){
+  const i = S.items.find(x => x.id === itemId); if(!i) return;
+  sheet('<h2>Record a past sale</h2>'+
+    '<p class="hint">'+esc(i.name)+' \u2014 '+num(i.qty)+' on hand. This writes the sale into history at the date you pick, so revenue and margins land in the right month.</p>'+
+    '<div class="grid2"><div class="field"><label>Vials sold</label><input id="rs_qty" type="number" inputmode="numeric" min="1" value="1"></div>'+
+    '<div class="field"><label>Price per vial</label><input id="rs_price" type="number" step="any" inputmode="decimal" value="'+num(i.price)+'"></div></div>'+
+    '<div class="grid2"><div class="field"><label>Sale date</label><input id="rs_date" type="date" value="'+toDateInput(Date.now())+'"></div>'+
+    '<div class="field"><label>Tier</label><select id="rs_tier"><option value="retail">Everyone else</option><option value="friends">Friends &amp; family</option></select></div></div>'+
+    '<div class="sheetact"><button class="btn" id="rs_cancel">Cancel</button>'+
+    '<button class="btn pri" id="rs_save">Record sale</button></div>');
+  setTimeout(() => {
+    const c = document.getElementById('rs_cancel');
+    const sv = document.getElementById('rs_save');
+    if(c) c.onclick = () => openItem(itemId);
+    if(sv) sv.onclick = () => saveRecordSale(itemId);
+  }, 0);
+}
+function saveRecordSale(itemId){
+  const i = S.items.find(x => x.id === itemId); if(!i) return;
+  const qty = num($("rs_qty").value);
+  const price = num($("rs_price").value);
+  const ts = fromDateInput($("rs_date").value, Date.now());
+  const tier = $("rs_tier").value;
+  if(qty <= 0){ toast("Quantity must be at least 1"); return; }
+  if(qty > num(i.qty)){ toast("Only "+num(i.qty)+" on hand \u2014 receive stock first, then record the sale"); return; }
+  // FIFO across lots, explicit price and timestamp
+  let left = qty;
+  const lots = S.lots.filter(l => l.itemId === i.id && num(l.remaining) > 0);
+  while(left > 0 && lots.length){
+    const l = lots[0];
+    const take = Math.min(left, num(l.remaining));
+    l.remaining = num(l.remaining) - take;
+    S.txns.push({id:uid("t"), ts, itemId:i.id, lotId:l.id, dir:"out",
+                 qty:take, cost:lotUnitCost(l), price, tier, pack:1, orderId:null});
+    left -= take;
+    if(num(l.remaining) <= 0) lots.shift();
+  }
+  if(left > 0){
+    S.txns.push({id:uid("t"), ts, itemId:i.id, lotId:null, dir:"out",
+                 qty:left, cost:unitCost(i.id), price, tier, pack:1, orderId:null});
+  }
+  i.qty = num(i.qty) - qty;
+  save(); closeSheet(); renderAll();
+  toast(qty+" \u00d7 "+money(price)+" recorded");
+  openItem(itemId);
+}
 function openItem(id){
   const i = S.items.find(x => x.id === id); if(!i) return;
   curItem = id;
@@ -3405,6 +3455,7 @@ function openItem(id){
       '<button aria-pressed="'+(!isStocked(i))+'" onclick="setCatalog(\''+i.id+'\',true)">Catalogue only</button></div>'+
     '<div class="field"><label>Weight each (g) — used for shipping rates</label><input id="e_wt" type="number" step="any" value="'+(num(i.weight)||"")+'" placeholder="vial + packaging"></div>'+
     '<button class="btn full" style="margin-bottom:10px;border-color:#28503A;color:var(--ok)" onclick="messageSheet(\''+(i.supplierId||"")+'\',[S.items.find(x=>x.id===\''+i.id+'\')])">WhatsApp a restock request</button>'+
+    '<button class="btn full" style="margin-bottom:10px" onclick="recordSaleSheet(\''+i.id+'\')">Record a past sale</button>'+
     (suggestedPrice(i) > 0
       ? '<p class="hint" style="margin-top:-4px">Cost '+money(costBasis(i))+' × '+markupX()+' = <b class="num">'+money(suggestedPrice(i))+'</b>'+
         (Math.abs(num(i.price)-suggestedPrice(i)) > 0.005
@@ -3989,10 +4040,17 @@ function deleteLot(id){
 }
 
 /* ---- orders ---- */
+function shipChargedSelect(id, cur){
+  const opts = [0,20,30,40,50,60,75,80,90];
+  const v = num(cur);
+  const list = opts.includes(v) ? opts : [v].concat(opts);
+  return '<select id="'+id+'">'+list.map(x =>
+    '<option value="'+x+'"'+(x===v?' selected':'')+'>'+(x===0?'No shipping charge':money(x))+'</option>').join("")+'</select>';
+}
 function newOrderSheet(){
   sheet('<h2>New order</h2>'+
     '<div class="field"><label>Customer or order reference</label><input id="o_ref" placeholder="e.g. #1042 — J. Rivera"></div>'+
-    '<div class="grid2"><div class="field"><label>Shipping charged</label><input id="o_sc" type="number" step="any" inputmode="decimal" value="0"></div>'+
+    '<div class="grid2"><div class="field"><label>Shipping charged</label>'+shipChargedSelect("o_sc",0)+'</div>'+
     '<div class="field"><label>Postage cost</label><input id="o_scost" type="number" step="any" inputmode="decimal" value="0"></div></div>'+
     '<p class="hint">Saving this puts you in picking mode — every scan on the Scan tab drops into this order.</p>'+
     '<div class="sheetact"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveNewOrder()">Start picking</button></div>');
@@ -4024,7 +4082,7 @@ function openOrder(id){
     '<button class="btn full" style="margin-bottom:10px" onclick="saveOrder(\''+o.id+'\',1);newCustSheet(\''+o.id+'\')">+ New customer</button>'+
     '<div class="grid2"><div class="field"><label>Carrier</label><input id="o_carrier" value="'+esc(o.carrier)+'" placeholder="USPS"></div>'+
     '<div class="field"><label>Tracking</label><input id="o_track" value="'+esc(o.tracking)+'"></div></div>'+
-    '<div class="grid2"><div class="field"><label>Shipping charged</label><input id="o_sc2" type="number" step="any" value="'+num(o.shipCharged)+'"></div>'+
+    '<div class="grid2"><div class="field"><label>Shipping charged</label>'+shipChargedSelect("o_sc2",o.shipCharged)+'</div>'+
     '<div class="field"><label>Postage cost</label><input id="o_scost2" type="number" step="any" value="'+num(o.shipCost)+'"></div></div>'+
     '<div class="field"><label>Status</label><select id="o_status">'+
     ["open","packed","shipped"].map(s => '<option'+(o.status===s?' selected':'')+'>'+s+'</option>').join("")+'</select></div>'+
@@ -5270,6 +5328,22 @@ on("addSupBtn", "click", newSupplierSheet);
 on("addPOBtn", "click", newPOSheet);
 on("addLotBtn", "click", newLotSheet);
 on("dupLotBtn", "click", dupLotsSheet);
+on("zeroStockBtn", "click", zeroStockSheet);
+function zeroStockSheet(){
+  const nLots = S.lots.length, nTx = S.txns.length;
+  const nQty = S.items.filter(i => num(i.qty) > 0).length;
+  confirmDelete("Zero all stock?",
+    "Every product goes to 0 on hand ("+nQty+" currently show stock), and all "+nLots+" lot"+(nLots===1?"":"s")+
+    " and "+nTx+" stock movement"+(nTx===1?"":"s")+" are deleted. Products, prices, vendors, purchases, orders and customers stay. Use this to wipe test data before entering the real counts.",
+    () => {
+      S.items.forEach(i => { i.qty = 0; });
+      S.lots = [];
+      S.txns = [];
+      S.activeOrder = null;
+      save(); closeSheet(); renderAll(); toast("Stock zeroed \u2014 ready for real entries");
+    });
+}
+
 function dupLotsSheet(){
   const byItem = {};
   S.lots.forEach(l => { (byItem[l.itemId]=byItem[l.itemId]||[]).push(l); });
