@@ -151,7 +151,7 @@ nav button[aria-current="true"]::before{content:"";position:absolute;top:0;left:
 nav .dot{position:absolute;top:6px;right:calc(50% - 22px);width:6px;height:6px;border-radius:50%;background:var(--alert)}
 
 /* ---- sheet ---- */
-.sheet{position:fixed;inset:0;z-index:60;background:rgba(6,10,12,.72);display:none;align-items:flex-end}
+.sheet{position:fixed;inset:0;z-index:90;background:rgba(6,10,12,.72);display:none;align-items:flex-end}
 .sheet.on{display:flex}
 .sheet .panel{
   background:var(--ink);border-top:1px solid var(--brand-dim);width:100%;max-height:92vh;overflow:auto;
@@ -285,7 +285,7 @@ input[type=file]{padding:8px;font-size:13px}
     <div id="poList"></div>
   </div>
   <div class="sect">
-    <div class="eyebrow"><span>Lots on hand</span><button class="pill" id="addLotBtn">+ Manual lot</button></div>
+    <div class="eyebrow"><span>Lots on hand</span><span style="display:flex;gap:6px"><button class="pill" id="dupLotBtn">Duplicates</button><button class="pill" id="addLotBtn">+ Manual lot</button></span></div>
     <p class="hint" style="margin-top:0">Every fee you paid to get a lot on the shelf divides across the vials you filled from it. That per-vial number is your true cost.</p>
     <div id="lotList"></div>
   </div>
@@ -322,7 +322,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-0845-acf466";
+const BUILD = "20260803-0901-aa1d2a";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1620,6 +1620,7 @@ function newPOSheet(){
     '<div class="field"><label>Vendor</label><select id="po_sup" onchange="poLinesRefresh()">'+
       S.suppliers.map(s => '<option value="'+s.id+'">'+esc(s.name)+'</option>').join("")+'</select></div>'+
     '<div class="eyebrow" style="margin:12px 0 6px">Kits to order</div>'+
+    '<input id="po_search" type="search" placeholder="Search products…" style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px" oninput="poLinesRefresh(this.value)">'+
     '<div id="po_lines"></div>'+
     '<div id="po_warn"></div>'+
     '<p class="hint" style="text-align:right">Order value <b class="num" id="po_total">$0.00</b></p>'+
@@ -1665,20 +1666,28 @@ function poLiveTotal(){
   const n = $("po_disc_note");
   if(n && newPODisc === 1 && auto < 1) n.textContent = "Volume discount of "+Math.round((1-auto)*100)+"% applies at this size.";
 }
-function poLinesRefresh(){
+function poLinesRefresh(filter){
   const sup = $("po_sup").value;
   const so = $("po_opt"), sObj = S.suppliers.find(x => x.id === sup);
   if(so) so.innerHTML = shipOptions(sObj).map((o,i) =>
     '<option value="'+i+'">'+esc(o.name||("Option "+(i+1)))+(num(o.add)?' (+'+money(num(o.add))+')':'')+'</option>').join("");
   const lead = avgLead(sup);
-  $("po_lines").innerHTML = S.items.map(i => {
+  const q = (filter||"").toLowerCase().trim();
+  const sorted = S.items.slice().sort((a,b) => (a.name||"").localeCompare(b.name||""));
+  const visible = q ? sorted.filter(i => (i.name||"").toLowerCase().includes(q) || (i.code||"").toLowerCase().includes(q)) : sorted;
+  const prev = {};
+  document.querySelectorAll(".po_k").forEach(el => { if(num(el.value)>0) prev[el.dataset.item]=el.value; });
+  $("po_lines").innerHTML = visible.map(i => {
     const p = vendorPriceFor(sup, i.id);
     const short = num(i.qty) <= num(i.reorder);
-    return '<div class="row'+(short?' low':'')+' po_row" id="por_'+i.id+'"><span class="nm"><b>'+esc(i.name)+
+    const v = prev[i.id]||"0";
+    const active = num(v)>0;
+    return '<div class="row'+(short?' low':'')+(active?' po_row_active':'')+' po_row" id="por_'+i.id+'"><span class="nm"><b>'+esc(i.name)+
       (short?' <span class="pill alert">low</span>':'')+'</b><small>'+num(i.qty)+' on hand'+
-      (p!=null?' · '+money(p)+'/kit':' · no price on file')+'</small></span>'+
+      (p!=null?' · \u2019'+money(p)+'/kit':' · no price on file')+'</small></span>'+
       '<span style="width:64px;flex:none"><input class="num po_k" data-item="'+i.id+'" data-price="'+(p||0)+
-      '" type="number" inputmode="numeric" min="0" value="0" style="text-align:center;padding:6px"></span></div>';
+      '" type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"></span>'+
+      '<button class="pill" style="margin-left:4px;flex:none" onclick="openItem(\''+i.id+'\')">Edit</button></div>';
   }).join("") + (lead ? '<p class="hint">Past orders from this vendor landed in about '+lead+' days.</p>' : '');
   document.querySelectorAll(".po_k").forEach(el => el.addEventListener("input", function(){
     poLiveTotal();
@@ -5248,6 +5257,27 @@ on("addSupplyBtn", "click", newSupplySheet);
 on("addSupBtn", "click", newSupplierSheet);
 on("addPOBtn", "click", newPOSheet);
 on("addLotBtn", "click", newLotSheet);
+on("dupLotBtn", "click", dupLotsSheet);
+function dupLotsSheet(){
+  // Find lots sharing the same itemId — most likely cause of accidental duplicates.
+  const byItem = {};
+  S.lots.forEach(l => { (byItem[l.itemId]=byItem[l.itemId]||[]).push(l); });
+  const dupes = Object.entries(byItem).filter(([,ls])=>ls.length>1);
+  if(!dupes.length){ toast("No duplicate lots found"); return; }
+  const rows = dupes.map(([itemId, ls]) => {
+    const it = S.items.find(i=>i.id===itemId);
+    return '<div style="margin-bottom:16px"><div class="eyebrow" style="margin-bottom:6px">'+esc(it?it.name:"unknown")+'</div>'+
+      ls.map(l => '<div class="row" style="margin-bottom:4px"><span class="nm"><b>'+esc(l.code)+'</b>'+
+        '<small>'+num(l.remaining)+' left · cost '+money(lotUnitCost(l))+'</small></span>'+
+        '<span class="rt"><button class="pill" onclick="openLot(\''+l.id+'\');">Edit</button>'+
+        '<button class="pill" style="margin-left:4px;color:var(--alert)" onclick="askDeleteLot(\''+l.id+'\');">Delete</button></span></div>'
+      ).join("")+'</div>';
+  }).join("");
+  sheet('<h2>Duplicate lots</h2>'+
+    '<p class="hint">These products have more than one lot. Keep the one with the right cost and remaining count; delete the extra. Stock counts are not automatically adjusted when you delete.</p>'+
+    rows+
+    '<div class="sheetact"><button class="btn pri full" onclick="closeSheet()">Done</button></div>');
+}
 on("addOrderBtn", "click", newOrderSheet);
 on("addQuoteBtn", "click", newQuote);
 on("addCustBtn", "click", () => newCustSheet(null));
