@@ -323,7 +323,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1135-91a319";
+const BUILD = "20260803-1140-c411f7";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -3289,11 +3289,13 @@ function renderSuppliers(){
       '<input id="bizName" value="'+esc(S.settings.biz||"")+'" placeholder="Your business name (optional)"></div>'+
       '<div class="field"><label>Venmo username (for payment links)</label><input id="payVenmo" value="'+esc(S.settings.payVenmo||"")+'" placeholder="your-venmo-name"></div>'+
       '<div class="field"><label>Cashtag (for payment links)</label><input id="payCash" value="'+esc(S.settings.payCash||"")+'" placeholder="YourCashtag \u2014 without the $"></div>'+
-      '<div class="field"><label>Zelle \u2014 email or phone shown to buyers</label><input id="payZelle" value="'+esc(S.settings.payZelle||"")+'" placeholder="you@email.com"></div>';
+      '<div class="field"><label>Zelle \u2014 email or phone shown to buyers</label><input id="payZelle" value="'+esc(S.settings.payZelle||"")+'" placeholder="you@email.com"></div>'+
+      '<div class="field"><label>Payment note \u2014 prefilled on Venmo, copyable for the rest</label><input id="payNote" value="'+esc(S.settings.payNote||"")+'" placeholder="blank uses the order reference"></div>';
   on("bizName", "change", e => { S.settings.biz = e.target.value.trim(); save(); toast("Saved"); });
   on("payVenmo", "change", e => { S.settings.payVenmo = e.target.value.trim().replace(/^@/,""); save(); toast("Saved"); });
   on("payCash", "change", e => { S.settings.payCash = e.target.value.trim().replace(/^\$/,""); save(); toast("Saved"); });
   on("payZelle", "change", e => { S.settings.payZelle = e.target.value.trim(); save(); toast("Saved"); });
+  on("payNote", "change", e => { S.settings.payNote = e.target.value.trim(); save(); toast("Saved"); });
 }
 function supplierFields(s){
   s = s || {};
@@ -4206,7 +4208,8 @@ function paymentSheet(orderId){
     toast("Add your Venmo, Cashtag or Zelle under Stock \u2192 vendor section settings first");
     return;
   }
-  const note = encodeURIComponent(o.ref || "Order");
+  const noteText = (S.settings.payNote||"").trim() || o.ref || "Order";
+  const note = encodeURIComponent(noteText);
   const venmoUrl = v ? "https://venmo.com/u/"+encodeURIComponent(v)+"?txn=pay&amount="+amt+"&note="+note : "";
   const cashUrl = cq ? "https://cash.app/$"+encodeURIComponent(cq)+"/"+amt : "";
   const row = (label, url) =>
@@ -4215,7 +4218,9 @@ function paymentSheet(orderId){
   sheet('<h2>Request '+money(num(amt))+'</h2>'+
     '<p class="hint" style="margin-top:-4px">'+esc(o.ref)+' \u2014 links carry the exact total. Send one on WhatsApp or open it here.</p>'+
     (venmoUrl ? row("Venmo \u00b7 @"+esc(v), venmoUrl) : '')+
-    (cashUrl ? row("Cash App \u00b7 $"+esc(cq), cashUrl) : '')+
+    (cashUrl ? row("Cash App \u00b7 $"+esc(cq), cashUrl)+
+      '<p class="hint" style="margin-top:-6px">Cash App links can\u2019t carry a note \u2014 paste this into the For field:</p>'+
+      '<button class="btn full" style="margin-bottom:12px" onclick="copyText(\''+esc(noteText).replace(/'/g,"\\'")+'\',this)">Copy note \u00b7 '+esc(noteText)+'</button>' : '')+
     (z ? '<div class="field"><label>Zelle \u2014 no links exist; send them this</label><input value="'+esc(z)+'" readonly></div>'+
          '<button class="btn full" style="margin-bottom:8px" onclick="copyText(\''+esc(z)+'\',this)">Copy Zelle address</button>' : '')+
     '<div class="sheetact"><button class="btn pri full" onclick="openOrder(\''+orderId+'\')">Back to order</button></div>');
