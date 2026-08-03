@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1908-5f8d7e";
+const BUILD = "20260803-1926-fc5653";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1166,6 +1166,28 @@ function restoreFromText(){
     '<p class="hint" style="color:var(--alert)">This replaces everything currently in this copy.</p>'+
     '<div class="sheetact"><button class="btn" onclick="backupSheet()">Cancel</button>'+
     '<button class="btn warn" onclick="applyRestore()">Replace everything</button></div>');
+}
+function dedupeCodesOnce(){
+  if(S.settings.codeDedupeV1) return;
+  const seen = {};
+  const fixed = [];
+  // Stocked items keep their code; empty twins get regenerated. Ties: first wins.
+  const order = S.items.slice().sort((a,b) => (num(b.qty)>0) - (num(a.qty)>0));
+  order.forEach(i => {
+    const c = (i.code||"").toUpperCase();
+    if(!c) return;
+    if(!seen[c]){ seen[c] = i.id; return; }
+    const nu = uniqueCodeFor(i.name, i.dose, i.id);
+    fixed.push(i.name+" \u2192 "+nu);
+    i.code = nu;
+    seen[nu.toUpperCase()] = i.id;
+  });
+  S.settings.codeDedupeV1 = true;
+  if(fixed.length){
+    save();
+    console.log("codes deduplicated:", fixed);
+    toast(fixed.length+" duplicate code"+(fixed.length===1?"":"s")+" fixed \u2014 stocked items kept theirs");
+  } else saveLocal();
 }
 function backupNudge(){
   const age = backupAgeDays();
@@ -2546,8 +2568,7 @@ function createFromReview(){
     const raw = (r.baseName || r.name);
     // composeName won't double up if the edited field already carries the dose.
     const base = review.withDose === false ? String(raw).trim() : composeName(raw, r.dose, r.unit);
-    const code = (String(raw).toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,8) || "SKU") +
-                 (r.dose ? "-" + r.dose : "");
+    const code = uniqueCodeFor(raw, r.dose, null);
     if(S.items.some(i => normName(i.name) === normName(base) && String(i.dose||"") === String(r.dose||""))) return;
     const it = {id:uid("i"), name:base, dose: r.dose ? String(r.dose) : "",
                 code, bin:"", price:0, qty:0, reorder:0, orderQty:0,
@@ -2883,6 +2904,21 @@ function packsFor(i){
   if(Array.isArray(i.packs) && i.packs.length) return i.packs;
   const base = i.code || "";
   return base ? [{code:base+"-01", qty:1}, {code:base+"-10", qty:10}] : [];
+}
+function codeTakenBy(code, exceptId){
+  const c = String(code||"").trim().toUpperCase();
+  if(!c) return null;
+  return S.items.find(i => i.id !== exceptId && (i.code||"").toUpperCase() === c) || null;
+}
+function uniqueCodeFor(name, dose, exceptId){
+  const base = (String(name).toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,14) || "SKU") +
+               (dose ? "-" + dose : "");
+  if(!codeTakenBy(base, exceptId)) return base;
+  for(let n = 2; n < 100; n++){
+    const c = base + "-" + n;
+    if(!codeTakenBy(c, exceptId)) return c;
+  }
+  return base + "-" + Date.now()%1000;
 }
 function resolveCode(codeRaw){
   const c = String(codeRaw||"").trim().toUpperCase();
@@ -3584,7 +3620,10 @@ function newItemSheet(code){
 function saveNewItem(){
   const name = $("f_name").value.trim();
   if(!name){ toast("Give it a name"); return; }
-  const it = {id:uid("i"), name, dose:$("f_dose").value.trim(), code:$("f_code").value.trim().toUpperCase(),
+  const codeWanted = $("f_code").value.trim().toUpperCase();
+  const clash = codeTakenBy(codeWanted, null);
+  if(clash){ toast("Code taken by "+clash.name+" \u2014 codes must be unique"); return; }
+  const it = {id:uid("i"), name, dose:$("f_dose").value.trim(), code:codeWanted,
               price:num($("f_price").value), qty:num($("f_qty").value), reorder:num($("f_re").value),
               supplierId:$("f_sup").value, orderQty:num($("f_oq").value), weight:num($("f_wt").value)};
   S.items.push(it); save(); closeSheet(); renderAll();
@@ -3740,7 +3779,10 @@ function saveItem(id, quiet){
   i.price = num($("e_price").value);
   i.qty = num($("e_qty").value);
   i.reorder = num($("e_re").value);
-  i.code = $("e_code").value.trim().toUpperCase();
+  const codeWanted = $("e_code").value.trim().toUpperCase();
+  const clash = codeTakenBy(codeWanted, i.id);
+  if(clash){ toast("Code taken by "+clash.name+" \u2014 codes must be unique"); return; }
+  i.code = codeWanted;
   i.bin = $("e_bin").value.trim().toUpperCase();
   i.supplierId = $("e_sup").value;
   i.orderQty = num($("e_oq").value);
@@ -4310,6 +4352,7 @@ function openOrder(id){
     '<div class="field"><label>Status</label><select id="o_status">'+
     ["open","packed","shipped"].map(s => '<option'+(o.status===s?' selected':'')+'>'+s+'</option>').join("")+'</select></div>'+
     '<button class="btn full" style="margin-bottom:8px" onclick="paymentSheet(\''+o.id+'\')">Request payment \u00b7 '+money(t.rev)+'</button>'+
+    '<button class="btn pri full" style="margin-bottom:8px" onclick="orderAddSheet(\''+o.id+'\')">Add products</button>'+
     '<div class="sheetact"><button class="btn" onclick="pickOrder(\''+o.id+'\')">Pick into this</button>'+
     '<button class="btn" onclick="shipSheet(\''+o.id+'\')">Ship</button>'+
     '<button class="btn pri" onclick="saveOrder(\''+o.id+'\')">Save</button></div>'+
@@ -4378,6 +4421,89 @@ function deleteOrder(id){
 function pickOrder(id){
   S.activeOrder = id; mode = "out"; setMode();
   save(); closeSheet(); switchTab("scan"); renderAll();
+}
+function orderAddSheet(orderId, filter){
+  const o = S.orders.find(x => x.id === orderId); if(!o) return;
+  const tier = orderTier(o);
+  const q = String(filter||"").trim().toLowerCase();
+  // Remember typed quantities across re-renders (searching must not wipe them)
+  const prev = {};
+  document.querySelectorAll(".oa_q").forEach(el => { if(num(el.value) > 0) prev[el.dataset.item] = el.value; });
+  const pool = S.items.slice()
+    .filter(i => !q || (i.name||"").toLowerCase().includes(q) || (i.code||"").toLowerCase().includes(q))
+    .sort((a,b) => (num(b.qty)>0)-(num(a.qty)>0) ||
+                   String(a.name||"").localeCompare(String(b.name||""),undefined,{numeric:true}));
+  const rows = pool.map(i => {
+    const sell = priceFor(i, tier, 1);
+    const v = prev[i.id] || "0";
+    const out = num(i.qty) <= 0;
+    return '<div class="row'+(num(v)>0?' po_row_active':'')+' po_row" id="oar_'+i.id+'">'+
+      '<span class="nm"><b>'+esc(i.name)+'</b>'+
+      '<small><b>'+esc(i.code||"")+'</b> \u00b7 '+num(i.qty)+' on hand'+(out?' \u00b7 OUT':'')+' \u00b7 '+money(sell)+' each</small></span>'+
+      '<span style="width:58px;flex:none;margin-left:auto"><input class="num oa_q" data-item="'+i.id+'" '+
+      'type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"'+(out?' disabled':'')+'></span></div>';
+  }).join("");
+  sheet('<h2>Add to '+esc(o.ref)+'</h2>'+
+    '<p class="hint" style="margin-top:-6px">'+(tier==="friends"?"Friends &amp; family prices":"Retail prices")+' \u00b7 vials come out of stock when you add them.</p>'+
+    '<input id="oa_search" type="search" placeholder="Search products\u2026" value="'+esc(filter||"")+'" '+
+      'oninput="orderAddSheet(\''+orderId+'\', this.value)" '+
+      'style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px">'+
+    '<p class="hint" id="oa_count" style="margin:0 0 6px"></p>'+
+    '<div style="max-height:52vh;overflow-y:auto">'+(rows || '<p class="hint">Nothing matches.</p>')+'</div>'+
+    '<div class="sheetact"><button class="btn" id="oa_back">Back to order</button>'+
+    '<button class="btn pri" id="oa_go">Add to order</button></div>');
+  setTimeout(() => {
+    const back = document.getElementById('oa_back');
+    const go = document.getElementById('oa_go');
+    if(back) back.onclick = () => openOrder(orderId);
+    if(go) go.onclick = () => orderAddCommit(orderId);
+    const recount = () => {
+      let items = 0, vials = 0, rev = 0;
+      document.querySelectorAll(".oa_q").forEach(el => {
+        const n = num(el.value);
+        if(n > 0){
+          items++; vials += n;
+          const it = S.items.find(x => x.id === el.dataset.item);
+          if(it) rev += n * priceFor(it, tier, 1);
+        }
+      });
+      const c = document.getElementById('oa_count');
+      if(c) c.innerHTML = items ? '<b>'+items+' product'+(items===1?'':'s')+'</b> \u00b7 '+vials+' vial'+(vials===1?'':'s')+' \u00b7 '+money(rev) : '';
+    };
+    document.querySelectorAll(".oa_q").forEach(el => el.addEventListener("input", function(){
+      const row = document.getElementById("oar_"+this.dataset.item);
+      if(row) row.classList.toggle("po_row_active", num(this.value) > 0);
+      recount();
+    }));
+    recount();
+    // Keep typing flow in the search box after re-render
+    const sb = document.getElementById('oa_search');
+    if(sb && filter != null){ try{ sb.focus(); sb.setSelectionRange(sb.value.length, sb.value.length); }catch(e){} }
+  }, 0);
+}
+function orderAddCommit(orderId){
+  const o = S.orders.find(x => x.id === orderId); if(!o) return;
+  const tier = orderTier(o);
+  const wants = [];
+  document.querySelectorAll(".oa_q").forEach(el => {
+    const n = num(el.value);
+    if(n > 0) wants.push({itemId: el.dataset.item, qty: n});
+  });
+  if(!wants.length){ toast("Set a quantity first"); return; }
+  const short = [];
+  let added = 0;
+  wants.forEach(w => {
+    const it = S.items.find(x => x.id === w.itemId); if(!it) return;
+    if(!moveOut(it, w.qty, o.id, 1)){ short.push(it.name+" ("+num(it.qty)+" on hand)"); return; }
+    const sell = priceFor(it, tier, 1);
+    const line = o.lines.find(l => l.itemId === it.id && num(l.price) === sell);
+    if(line) line.qty += w.qty; else o.lines.push({itemId: it.id, qty: w.qty, price: sell, pack: 1});
+    added += w.qty;
+  });
+  save(); renderAll();
+  if(short.length) toast("Added "+added+" \u2014 short on: "+short.join(", "));
+  else toast(added+" vial"+(added===1?"":"s")+" added");
+  openOrder(orderId);
 }
 function removeLine(oid, ix){
   const o = S.orders.find(x => x.id === oid); if(!o) return;
@@ -4560,6 +4686,7 @@ function pickRate(oid, ix){
   save();
   const c = $("sh_carrier"); if(c) c.value = r.carrier;
   fetchRates(oid);
+  try{ dedupeCodesOnce(); }catch(e){}
   renderAll();
   toast(r.carrier + " · " + money(num(r.amount)) + " into cost");
 }
@@ -5763,6 +5890,7 @@ on("scanInput", "keydown", e => {
     document.addEventListener("visibilitychange", () => { if(!document.hidden) checkForUpdate(true); });
   }catch(e){ console.warn("update check failed", e); }
   try{ loginGate(); }catch(e){ console.warn("login gate failed", e); }
+  try{ dedupeCodesOnce(); }catch(e){ console.warn("code dedupe failed", e); }
   try{ setTimeout(backupNudge, 1200); }catch(e){ console.warn("backup nudge failed", e); }
   [["logo", loadLogo], ["review", loadReview], ["polling", startPolling],
    ["scale", reconnectScale], ["mode", setMode]].forEach(([what, fn]) => {
