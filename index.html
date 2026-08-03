@@ -323,7 +323,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1129-272658";
+const BUILD = "20260803-1135-91a319";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1160,6 +1160,50 @@ function restoreFromText(){
     '<p class="hint" style="color:var(--alert)">This replaces everything currently in this copy.</p>'+
     '<div class="sheetact"><button class="btn" onclick="backupSheet()">Cancel</button>'+
     '<button class="btn warn" onclick="applyRestore()">Replace everything</button></div>');
+}
+function backupNudge(){
+  const age = backupAgeDays();
+  if(age !== null && age < 7) return;                       // fresh enough
+  if(!S.items.length && !S.lots.length && !S.orders.length) return;  // nothing to back up
+  const snoozeUntil = num(S.settings.backupSnooze);
+  if(snoozeUntil && Date.now() < snoozeUntil) return;
+  sheet('<h2>Backup overdue</h2>'+
+    '<div class="astrip" style="border:1px solid #4A2C29;border-radius:4px;margin-bottom:10px"><span class="t">'+
+      (age === null ? "This data has never been backed up." : "Last backup was "+age+" days ago.")+'</span></div>'+
+    '<p class="hint">One tap emails the full backup to yourself \u2014 products, lots, costs, orders, customers, everything.</p>'+
+    '<button class="btn pri full" id="bn_email" style="margin-bottom:8px">Email the backup now</button>'+
+    '<button class="btn full" id="bn_file" style="margin-bottom:8px">Save as a file instead</button>'+
+    '<div class="sheetact"><button class="btn" id="bn_snooze">Remind me tomorrow</button></div>');
+  setTimeout(() => {
+    const e = document.getElementById('bn_email');
+    const f = document.getElementById('bn_file');
+    const z = document.getElementById('bn_snooze');
+    if(e) e.onclick = emailBackup;
+    if(f) f.onclick = () => { doBackup(); };
+    if(z) z.onclick = () => { S.settings.backupSnooze = Date.now() + 86400000; saveLocal(); closeSheet(); };
+  }, 0);
+}
+async function emailBackup(){
+  const text = backupBlob();
+  const name = "itl-ops-" + toDateInput(Date.now()) + ".json";
+  const subject = "ITL Ops backup " + toDateInput(Date.now());
+  // Best path: share the file straight into Gmail/mail app (Android, most mobile)
+  try{
+    const file = new File([text], name, {type:"application/json"});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title:subject});
+      S.settings.backupAt = Date.now(); S.settings.backupSnooze = 0;
+      save(); closeSheet(); renderAll(); toast("Backed up");
+      return;
+    }
+  }catch(e){ if(e && e.name === "AbortError") return; /* user cancelled: keep sheet */ }
+  // Fallback: copy the backup, open a pre-addressed draft to paste into
+  try{ await navigator.clipboard.writeText(text); }catch(e){}
+  S.settings.backupAt = Date.now(); S.settings.backupSnooze = 0;
+  save(); closeSheet(); renderAll();
+  toast("Backup copied \u2014 paste into the email");
+  location.href = "mailto:?subject=" + encodeURIComponent(subject) +
+    "&body=" + encodeURIComponent("Paste the backup below (it is on your clipboard):\n\n");
 }
 function backupSheet(){
   const age = backupAgeDays();
@@ -3242,8 +3286,14 @@ function renderSuppliers(){
       }).join("")
     : '<div class="empty" style="padding:16px"><b>No suppliers yet</b>Save a WhatsApp number once and every reorder message writes itself.</div>')
     + '<div class="field" style="margin-top:12px"><label>Sign restock messages as</label>'+
-      '<input id="bizName" value="'+esc(S.settings.biz||"")+'" placeholder="Your business name (optional)"></div>';
+      '<input id="bizName" value="'+esc(S.settings.biz||"")+'" placeholder="Your business name (optional)"></div>'+
+      '<div class="field"><label>Venmo username (for payment links)</label><input id="payVenmo" value="'+esc(S.settings.payVenmo||"")+'" placeholder="your-venmo-name"></div>'+
+      '<div class="field"><label>Cashtag (for payment links)</label><input id="payCash" value="'+esc(S.settings.payCash||"")+'" placeholder="YourCashtag \u2014 without the $"></div>'+
+      '<div class="field"><label>Zelle \u2014 email or phone shown to buyers</label><input id="payZelle" value="'+esc(S.settings.payZelle||"")+'" placeholder="you@email.com"></div>';
   on("bizName", "change", e => { S.settings.biz = e.target.value.trim(); save(); toast("Saved"); });
+  on("payVenmo", "change", e => { S.settings.payVenmo = e.target.value.trim().replace(/^@/,""); save(); toast("Saved"); });
+  on("payCash", "change", e => { S.settings.payCash = e.target.value.trim().replace(/^\$/,""); save(); toast("Saved"); });
+  on("payZelle", "change", e => { S.settings.payZelle = e.target.value.trim(); save(); toast("Saved"); });
 }
 function supplierFields(s){
   s = s || {};
@@ -4140,10 +4190,35 @@ function openOrder(id){
     '<div class="field"><label>Postage cost</label><input id="o_scost2" type="number" step="any" value="'+num(o.shipCost)+'"></div></div>'+
     '<div class="field"><label>Status</label><select id="o_status">'+
     ["open","packed","shipped"].map(s => '<option'+(o.status===s?' selected':'')+'>'+s+'</option>').join("")+'</select></div>'+
+    '<button class="btn full" style="margin-bottom:8px" onclick="paymentSheet(\''+o.id+'\')">Request payment \u00b7 '+money(t.rev)+'</button>'+
     '<div class="sheetact"><button class="btn" onclick="pickOrder(\''+o.id+'\')">Pick into this</button>'+
     '<button class="btn" onclick="shipSheet(\''+o.id+'\')">Ship</button>'+
     '<button class="btn pri" onclick="saveOrder(\''+o.id+'\')">Save</button></div>'+
     dangerZone("Delete order", () => askDeleteOrder(o.id)));
+}
+function paymentSheet(orderId){
+  const o = S.orders.find(x => x.id === orderId); if(!o) return;
+  const amt = orderTotals(o).rev.toFixed(2);
+  const v = (S.settings.payVenmo||"").trim();
+  const cq = (S.settings.payCash||"").trim();
+  const z = (S.settings.payZelle||"").trim();
+  if(!v && !cq && !z){
+    toast("Add your Venmo, Cashtag or Zelle under Stock \u2192 vendor section settings first");
+    return;
+  }
+  const note = encodeURIComponent(o.ref || "Order");
+  const venmoUrl = v ? "https://venmo.com/u/"+encodeURIComponent(v)+"?txn=pay&amount="+amt+"&note="+note : "";
+  const cashUrl = cq ? "https://cash.app/$"+encodeURIComponent(cq)+"/"+amt : "";
+  const row = (label, url) =>
+    '<a class="btn full" style="margin-bottom:8px" href="'+url+'" target="_blank" rel="noopener">'+label+'</a>'+
+    '<button class="btn full" style="margin-bottom:12px" onclick="copyText(\''+url+'\',this)">Copy that link</button>';
+  sheet('<h2>Request '+money(num(amt))+'</h2>'+
+    '<p class="hint" style="margin-top:-4px">'+esc(o.ref)+' \u2014 links carry the exact total. Send one on WhatsApp or open it here.</p>'+
+    (venmoUrl ? row("Venmo \u00b7 @"+esc(v), venmoUrl) : '')+
+    (cashUrl ? row("Cash App \u00b7 $"+esc(cq), cashUrl) : '')+
+    (z ? '<div class="field"><label>Zelle \u2014 no links exist; send them this</label><input value="'+esc(z)+'" readonly></div>'+
+         '<button class="btn full" style="margin-bottom:8px" onclick="copyText(\''+esc(z)+'\',this)">Copy Zelle address</button>' : '')+
+    '<div class="sheetact"><button class="btn pri full" onclick="openOrder(\''+orderId+'\')">Back to order</button></div>');
 }
 function saveOrder(id, quiet){
   const o = S.orders.find(x => x.id === id); if(!o) return;
@@ -5566,6 +5641,7 @@ on("scanInput", "keydown", e => {
     document.addEventListener("visibilitychange", () => { if(!document.hidden) checkForUpdate(true); });
   }catch(e){ console.warn("update check failed", e); }
   try{ loginGate(); }catch(e){ console.warn("login gate failed", e); }
+  try{ setTimeout(backupNudge, 1200); }catch(e){ console.warn("backup nudge failed", e); }
   [["logo", loadLogo], ["review", loadReview], ["polling", startPolling],
    ["scale", reconnectScale], ["mode", setMode]].forEach(([what, fn]) => {
     try{ fn(); }catch(e){ console.warn(what + " init failed", e); }
