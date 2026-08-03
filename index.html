@@ -320,7 +320,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-0603-babad8";
+const BUILD = "20260803-0714-42d552";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -794,13 +794,58 @@ async function stationGet(path){
   if(!r.ok) throw new Error("HTTP " + r.status);
   return r.json();
 }
+const DEFAULT_SYNC = "https://itl-ops-rates.itlcompounds.workers.dev";
 function syncURL(){
-  const u = (S.settings.syncUrl||"").trim();
-  if(!u) return "";
+  const u = (S.settings.syncUrl||"").trim() || DEFAULT_SYNC;
   return u.replace(/\/+$/,"") + "/sync";
 }
 function syncHeaders(){
   return {"Content-Type":"application/json", "X-ITLOps-Key": S.settings.rateKey || ""};
+}
+function loginGate(){
+  // A fresh device has no key and no data. Ask for the password once, verify it
+  // against the Worker, store it, pull. Never shown again on this device.
+  if((S.settings.rateKey||"").trim()) return;
+  if(S.items.length || S.lots.length || S.orders.length) return; // offline work exists; don't block it
+  const d = document.createElement("div");
+  d.id = "loginGate";
+  d.style.cssText = "position:fixed;inset:0;z-index:99999;background:#101214;display:flex;align-items:center;justify-content:center";
+  d.innerHTML =
+    '<div style="background:#1b1e22;padding:32px 28px;border-radius:14px;width:min(320px,90vw);text-align:center;color:#e8e8e8;font-family:inherit;box-shadow:0 8px 40px rgba(0,0,0,.5)">'+
+      '<div style="font-size:22px;font-weight:700;margin-bottom:4px">ITL Ops</div>'+
+      '<div style="font-size:13px;opacity:.65;margin-bottom:18px">Enter your password to load your data</div>'+
+      '<input id="lg_pw" type="password" autocomplete="current-password" placeholder="Password" '+
+        'style="width:100%;box-sizing:border-box;padding:12px;border-radius:8px;border:1px solid #3a3f45;background:#101214;color:#e8e8e8;font-size:16px;margin-bottom:12px">'+
+      '<button id="lg_go" style="width:100%;padding:12px;border-radius:8px;border:0;background:#3b82f6;color:#fff;font-size:16px;font-weight:600;cursor:pointer">Unlock</button>'+
+      '<div id="lg_msg" style="font-size:12px;margin-top:10px;min-height:16px;color:#f87171"></div>'+
+      '<div id="lg_skip" style="font-size:12px;opacity:.55;margin-top:6px;text-decoration:underline;cursor:pointer">Work offline without syncing</div>'+
+    '</div>';
+  document.body.appendChild(d);
+  const pw = d.querySelector("#lg_pw"), msg = d.querySelector("#lg_msg");
+  async function go(){
+    const v = pw.value.trim();
+    if(!v){ msg.textContent = "Enter the password"; return; }
+    msg.style.color = "#9ca3af"; msg.textContent = "Checking\u2026";
+    try{
+      const r = await fetch(syncURL(), {headers:{"Content-Type":"application/json","X-ITLOps-Key":v}});
+      if(r.status === 401 || r.status === 403){ msg.style.color = "#f87171"; msg.textContent = "Wrong password"; pw.select(); return; }
+      if(!r.ok) throw new Error("HTTP " + r.status);
+      S.settings.rateKey = v;
+      if(!(S.settings.syncUrl||"").trim()) S.settings.syncUrl = DEFAULT_SYNC;
+      saveLocal();
+      d.remove();
+      const ok = await pullSync(true);
+      renderAll();
+      toast(ok ? ("Data loaded \u2014 revision " + (S.settings.syncRev||"?")) : "Signed in \u2014 nothing stored remotely yet");
+    }catch(e){
+      msg.style.color = "#f87171";
+      msg.textContent = "Can\u2019t reach the server \u2014 check your connection";
+    }
+  }
+  d.querySelector("#lg_go").addEventListener("click", go);
+  pw.addEventListener("keydown", e => { if(e.key === "Enter") go(); });
+  d.querySelector("#lg_skip").addEventListener("click", () => d.remove());
+  setTimeout(() => { try{ pw.focus(); }catch(e){} }, 50);
 }
 async function pullSync(quiet){
   const url = syncURL(); if(!url) return false;
@@ -944,8 +989,8 @@ function syncSheet(){
     (hasLocalStore ? '' : '<div class="astrip" style="border:1px solid #4A2C29;border-radius:4px;margin-bottom:10px">'+
       '<span class="t">This copy has no local storage — set up sync or your data will not survive a reload</span></div>')+
     '<p class="hint" style="margin-top:-2px">Points at the same Worker as your carrier rates. Your data lives there, so a phone in a car and a laptop at the bench see one shared copy.</p>'+
-    '<div class="field"><label>Worker URL</label><input id="sy_url" value="'+esc(S.settings.syncUrl||S.settings.rateUrl||"")+'" placeholder="https://rates.yourdomain.workers.dev"></div>'+
-    '<div class="field"><label>Shared key</label><input id="sy_key" value="'+esc(S.settings.rateKey||"")+'"></div>'+
+    '<div class="field"><label>Password</label><input id="sy_key" type="password" autocomplete="current-password" value="'+esc(S.settings.rateKey||"")+'"></div>'+
+    '<div class="field"><label>Worker URL (advanced \u2014 blank uses the default)</label><input id="sy_url" value="'+esc(S.settings.syncUrl||S.settings.rateUrl||"")+'" placeholder="'+DEFAULT_SYNC+'"></div>'+
     '<div class="field"><label>Bench station — scale &amp; printer (optional)</label>'+
       '<input id="sy_st" value="'+esc(S.settings.stationUrl||"")+'" placeholder="http://itlops.local:8080"></div>'+
     '<p class="hint" style="margin-top:-4px">Leave the Worker as the sync address. Data never depends on the Pi being awake.</p>'+
@@ -5196,6 +5241,7 @@ on("scanInput", "keydown", e => {
     setInterval(() => checkForUpdate(true), 3600000);
     document.addEventListener("visibilitychange", () => { if(!document.hidden) checkForUpdate(true); });
   }catch(e){ console.warn("update check failed", e); }
+  try{ loginGate(); }catch(e){ console.warn("login gate failed", e); }
   [["logo", loadLogo], ["review", loadReview], ["polling", startPolling],
    ["scale", reconnectScale], ["mode", setMode]].forEach(([what, fn]) => {
     try{ fn(); }catch(e){ console.warn(what + " init failed", e); }
