@@ -323,7 +323,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1100-272078";
+const BUILD = "20260803-1113-c45318";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1203,9 +1203,16 @@ function discTiers(s){
   const d = num(s.discount);
   return (d > 0 && d < 1) ? [{minKits:1, disc:d}] : [];
 }
+const FLAT_SHIP = [
+  {name:"No shipping charged", flat:0},
+  {name:"Flat $20", flat:20}, {name:"Flat $30", flat:30}, {name:"Flat $40", flat:40},
+  {name:"Flat $50", flat:50}, {name:"Flat $60", flat:60}, {name:"Flat $75", flat:75},
+  {name:"Flat $80", flat:80}, {name:"Flat $90", flat:90},
+];
 function shipOptions(s){
-  if(Array.isArray(s.shipOptions) && s.shipOptions.length) return s.shipOptions;
-  return [{name:"Standard", add:0}];
+  const base = (Array.isArray(s.shipOptions) && s.shipOptions.length)
+    ? s.shipOptions : [{name:"Vendor rate", add:0}];
+  return base.concat(FLAT_SHIP);
 }
 // Tiers are thresholds, not brackets: the highest one you qualify for wins.
 function tierPick(list, kits, key, dflt){
@@ -1214,16 +1221,7 @@ function tierPick(list, kits, key, dflt){
       .forEach(x => { if(kits >= (num(x.minKits)||1)) v = num(x[key]); });
   return v;
 }
-function shipFeeFor(s, kits, optIx, goods){
-  if(!s) return 0;
-  const freeOver = num(s.shipFreeOver);
-  if(freeOver > 0 && num(goods) >= freeOver) return 0;
-  let fee = tierPick(shipTiers(s), kits, "fee", 0);
-  const opts = shipOptions(s);
-  const o = opts[num(optIx)] || opts[0];
-  fee += num(o && o.add);
-  return fee;
-}
+
 function discFor(s, kits){
   if(!s) return 1;
   const d = tierPick(discTiers(s), kits, "disc", 1);
@@ -1652,7 +1650,7 @@ function poLiveTotal(){
   });
   const sup = S.suppliers.find(x => x.id === ($("po_sup") ? $("po_sup").value : ""));
   const optIx = num($("po_opt") ? $("po_opt").value : 0);
-  const ship = shipFeeFor(sup, kits, optIx, goods);
+  const ship = shipFeeFor(sup, kits, goods, optIx);
   const auto = discFor(sup, kits);
   const disc = (newPODisc !== 1) ? newPODisc : auto;      // manual choice wins
   const total = (goods + ship) * disc;
@@ -2081,8 +2079,9 @@ function shipFeeFor(sup, kits, goods, optIx){
   }
   const freeOver = num(sup.shipFreeOver);
   if(freeOver > 0 && goods >= freeOver) fee = 0;
-  const opt = (sup.shipOptions||[])[num(optIx)||0];
-  if(opt) fee += num(opt.extra);
+  const opt = shipOptions(sup)[num(optIx)||0];
+  if(opt && opt.flat != null) return num(opt.flat);
+  if(opt) fee += num(opt.extra||opt.add);
   return fee;
 }
 function discountFor(sup, kits, goods){
