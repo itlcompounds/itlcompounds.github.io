@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1936-759399";
+const BUILD = "20260803-1944-d00121";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4335,9 +4335,9 @@ function openOrder(id){
   const t = orderTotals(o);
   const lines = o.lines.length ? o.lines.map((l,ix) => {
     const it = S.items.find(i => i.id === l.itemId);
-    return '<div class="row"><span class="nm"><b>'+esc(it?it.name:"deleted")+'</b><small>'+l.qty+' × '+money(l.price)+'</small></span>'+
+    return '<div class="row"><span class="nm" onclick="editLineSheet(\''+o.id+'\','+ix+')" style="cursor:pointer"><b>'+esc(it?it.name:"deleted")+'</b><small>'+l.qty+' × '+money(l.price)+' \u00b7 tap to change</small></span>'+
       '<span class="rt"><b>'+money(l.qty*num(l.price))+'</b></span>'+
-      '<button class="pill" onclick="removeLine(\''+o.id+'\','+ix+')">Undo</button></div>';
+      '<button class="pill" onclick="editLineSheet(\''+o.id+'\','+ix+')">\u0045dit</button></div>';
   }).join("") : '<div class="empty" style="padding:14px">Nothing picked yet. Scan vials on the Scan tab.</div>';
   sheet('<h2>'+esc(o.ref)+'</h2>'+lines+
     '<div class="rcells" style="border:1px solid var(--line);border-radius:4px;margin:10px 0">'+
@@ -4439,15 +4439,16 @@ function orderAddSheet(orderId, filter){
     const sell = priceFor(i, tier, 1);
     const v = prev[i.id] || "0";
     const out = num(i.qty) <= 0;
-    const pv = prevP[i.id] != null ? prevP[i.id] : sell;
+    const pv = prevP[i.id] != null ? prevP[i.id] : (sell > 0 ? sell : "");
+    const lbl = t => '<small style="display:block;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-align:center;margin-bottom:2px">'+t+'</small>';
     return '<div class="row'+(num(v)>0?' po_row_active':'')+' po_row" id="oar_'+i.id+'">'+
       '<span class="nm"><b>'+esc(i.name)+'</b>'+
-      '<small><b>'+esc(i.code||"")+'</b> \u00b7 '+num(i.qty)+' on hand'+(out?' \u00b7 OUT':'')+' \u00b7 list '+money(sell)+'</small></span>'+
-      '<span style="display:flex;gap:4px;align-items:center;margin-left:auto">'+
-      '<span style="width:74px;flex:none"><input class="num oa_p" data-item="'+i.id+'" type="number" step="any" inputmode="decimal" '+
-      'value="'+pv+'" placeholder="$ each" style="text-align:center;padding:6px"'+(out?' disabled':'')+'></span>'+
-      '<span style="width:58px;flex:none"><input class="num oa_q" data-item="'+i.id+'" '+
-      'type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"'+(out?' disabled':'')+'></span></span></div>';
+      '<small><b>'+esc(i.code||"")+'</b> \u00b7 '+num(i.qty)+' on hand'+(out?' \u00b7 OUT':'')+(sell>0?' \u00b7 list '+money(sell):'')+'</small></span>'+
+      '<span style="display:flex;gap:6px;align-items:flex-end;margin-left:auto">'+
+      '<span style="width:58px;flex:none">'+lbl('vials')+'<input class="num oa_q" data-item="'+i.id+'" '+
+      'type="number" inputmode="numeric" min="0" step="1" value="'+v+'" style="text-align:center;padding:6px"'+(out?' disabled':'')+'></span>'+
+      '<span style="width:74px;flex:none">'+lbl('$ each')+'<input class="num oa_p" data-item="'+i.id+'" type="number" step="any" inputmode="decimal" '+
+      'value="'+pv+'" placeholder="price" style="text-align:center;padding:6px"'+(out?' disabled':'')+'></span></span></div>';
   }).join("");
   sheet('<h2>Add to '+esc(o.ref)+'</h2>'+
     '<p class="hint" style="margin-top:-6px">'+(tier==="friends"?"Friends &amp; family prices":"Retail prices")+' \u00b7 vials come out of stock when you add them.</p>'+
@@ -4495,11 +4496,19 @@ function orderAddCommit(orderId){
   const priceOf = {};
   document.querySelectorAll(".oa_p").forEach(el => { priceOf[el.dataset.item] = num(el.value); });
   const wants = [];
+  let fraction = null, unpriced = null;
   document.querySelectorAll(".oa_q").forEach(el => {
     const n = num(el.value);
-    if(n > 0) wants.push({itemId: el.dataset.item, qty: n, price: num(priceOf[el.dataset.item])});
+    if(n > 0){
+      const it = S.items.find(x => x.id === el.dataset.item);
+      if(n % 1 !== 0 && !fraction) fraction = it ? it.name : "a product";
+      if(num(priceOf[el.dataset.item]) <= 0 && !unpriced) unpriced = it ? it.name : "a product";
+      wants.push({itemId: el.dataset.item, qty: n, price: num(priceOf[el.dataset.item])});
+    }
   });
   if(!wants.length){ toast("Set a quantity first"); return; }
+  if(fraction){ toast("Whole vials only \u2014 check "+fraction); return; }
+  if(unpriced){ toast("Type a $ each for "+unpriced); return; }
   const short = [];
   let added = 0;
   wants.forEach(w => {
@@ -4515,14 +4524,76 @@ function orderAddCommit(orderId){
   else toast(added+" vial"+(added===1?"":"s")+" added");
   openOrder(orderId);
 }
+function unpickFromLine(o, l, qtyBack){
+  // Reverse this line's out-movements, newest first: vials return to the lots
+  // they came from and the sale leaves the ledger. The mirror of moveOut.
+  let left = qtyBack;
+  const mine = S.txns.filter(t => t.orderId === o.id && t.dir === "out" &&
+    t.itemId === l.itemId && num(t.price) === num(l.price)).reverse();
+  for(const t of mine){
+    if(left <= 0) break;
+    const take = Math.min(left, num(t.qty));
+    t.qty = num(t.qty) - take;
+    const lot = S.lots.find(x => x.id === t.lotId);
+    if(lot) lot.remaining = num(lot.remaining) + take;
+    left -= take;
+  }
+  S.txns = S.txns.filter(t => num(t.qty) > 0);
+  const it = S.items.find(i => i.id === l.itemId);
+  if(it) it.qty = num(it.qty) + (qtyBack - Math.max(0, left));
+  return qtyBack - Math.max(0, left);
+}
 function removeLine(oid, ix){
   const o = S.orders.find(x => x.id === oid); if(!o) return;
   const l = o.lines[ix]; if(!l) return;
-  const it = S.items.find(i => i.id === l.itemId);
-  if(it){ moveIn(it, l.qty, null); }
+  unpickFromLine(o, l, num(l.qty));
   o.lines.splice(ix,1);
   save(); renderAll(); openOrder(oid);
-  toast("Put back");
+  toast("Put back \u2014 stock and history restored");
+}
+function editLineSheet(oid, ix){
+  const o = S.orders.find(x => x.id === oid); if(!o) return;
+  const l = o.lines[ix]; if(!l) return;
+  const it = S.items.find(i => i.id === l.itemId);
+  sheet('<h2>'+esc(it ? it.name : "Line")+'</h2>'+
+    '<p class="hint" style="margin-top:-6px">'+esc(o.ref)+' \u00b7 '+num(it?it.qty:0)+' still on the shelf. Changes flow through to stock and the ledger.</p>'+
+    '<div class="grid2"><div class="field"><label>Vials</label><input id="el_q" type="number" inputmode="numeric" min="0" value="'+num(l.qty)+'"></div>'+
+    '<div class="field"><label>$ each \u2014 what they actually pay</label><input id="el_p" type="number" step="any" inputmode="decimal" value="'+num(l.price)+'"></div></div>'+
+    '<button class="btn warn full" style="margin-bottom:8px" id="el_rm">Remove this line</button>'+
+    '<div class="sheetact"><button class="btn" id="el_back">Back</button>'+
+    '<button class="btn pri" id="el_save">Save</button></div>');
+  setTimeout(() => {
+    const back = document.getElementById('el_back');
+    const rm = document.getElementById('el_rm');
+    const sv = document.getElementById('el_save');
+    if(back) back.onclick = () => openOrder(oid);
+    if(rm) rm.onclick = () => removeLine(oid, ix);
+    if(sv) sv.onclick = () => {
+      const nq = num(document.getElementById('el_q').value);
+      const np = num(document.getElementById('el_p').value);
+      const oldQ = num(l.qty), oldP = num(l.price);
+      if(nq % 1 !== 0){ toast("Whole vials only"); return; }
+      if(nq <= 0){ removeLine(oid, ix); return; }
+      if(nq < oldQ) unpickFromLine(o, l, oldQ - nq);
+      if(nq > oldQ){
+        if(!moveOut(it, nq - oldQ, o.id, num(l.pack)||1, oldP)){
+          toast("Only "+num(it.qty)+" on hand \u2014 quantity unchanged");
+          document.getElementById('el_q').value = oldQ;
+          return;
+        }
+      }
+      l.qty = nq;
+      if(np !== oldP){
+        S.txns.forEach(t => {
+          if(t.orderId === o.id && t.dir === "out" && t.itemId === l.itemId && num(t.price) === oldP)
+            t.price = np;
+        });
+        l.price = np;
+      }
+      save(); renderAll(); toast("Line updated");
+      openOrder(oid);
+    };
+  }, 0);
 }
 
 /* ============ export ============ */
