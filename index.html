@@ -322,7 +322,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-0901-aa1d2a";
+const BUILD = "20260803-0912-5a4472";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -3328,10 +3328,18 @@ function dangerZone(label, fn){
     'onclick="'+fn+'">'+label+'</button></div>';
 }
 function confirmDelete(title, detail, fn, backFn){
+  const runFn = typeof fn === 'function' ? fn : () => new Function(fn)();
+  const runBack = backFn ? (typeof backFn === 'function' ? backFn : () => new Function(backFn)()) : closeSheet;
   sheet('<h2>'+title+'</h2>'+
     '<p class="hint">'+detail+'</p>'+
-    '<button class="btn pri full" style="margin-bottom:8px" onclick="'+(backFn||"closeSheet()")+'">Keep it</button>'+
-    '<div class="sheetact"><button class="btn warn" onclick="'+fn+'">Delete anyway</button></div>');
+    '<button class="btn pri full" style="margin-bottom:8px" id="cdKeep">Keep it</button>'+
+    '<div class="sheetact"><button class="btn warn" id="cdDel">Delete anyway</button></div>');
+  requestAnimationFrame(() => {
+    const k = document.getElementById('cdKeep');
+    const d = document.getElementById('cdDel');
+    if(k) k.onclick = runBack;
+    if(d) d.onclick = runFn;
+  });
 }
 function sheet(html){ $("sheetPanel").innerHTML = html; $("sheet").classList.add("on"); }
 function closeSheet(){ $("sheet").classList.remove("on"); $("sheetPanel").innerHTML = ""; }
