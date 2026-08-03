@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1944-d00121";
+const BUILD = "20260803-2026-ee41b7";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -3515,21 +3515,38 @@ function orderTotals(o){
   rev += num(o.shipCharged); cost += num(o.shipCost);
   return {rev, cost, profit: rev-cost};
 }
+function doneOrdersSheet(){
+  const done = S.orders.filter(o => o.status === "done")
+    .sort((a,b) => num(b.paidAt||b.created) - num(a.paidAt||a.created)).slice(0,50);
+  if(!done.length){ toast("No completed orders yet"); return; }
+  sheet('<h2>Completed orders</h2>'+
+    done.map(o => {
+      const t = orderTotals(o);
+      return '<button class="row" onclick="openOrder(\''+o.id+'\')"><span class="nm"><b>'+esc(o.ref)+'</b>'+
+        '<small>'+(o.paidAt ? 'paid '+toDateInput(o.paidAt) : 'closed unpaid')+'</small></span>'+
+        '<span class="rt"><b>'+money(t.rev)+'</b></span></button>';
+    }).join("")+
+    '<div class="sheetact"><button class="btn pri full" onclick="closeSheet()">Done</button></div>');
+}
 function renderOrders(){
   if(!S.orders.length){
     $("orderList").innerHTML = '<div class="empty"><b>No orders yet</b>Start an order, then scan vials straight into it from the Scan tab.</div>';
     return;
   }
-  $("orderList").innerHTML = S.orders.slice().reverse().map(o => {
+  const live = S.orders.filter(o => o.status !== "done");
+  const doneN = S.orders.length - live.length;
+  $("orderList").innerHTML = live.slice().reverse().map(o => {
     const t = orderTotals(o);
     const isQ = o.status === "quote";
     const pillClass = o.status === "shipped" ? "ok" : o.status === "packed" ? "brand" : isQ ? "brand" : "";
     const active = S.activeOrder === o.id;
+    const owes = !isQ && !o.paidAt && t.rev > 0;
     return '<button class="row" onclick="'+(isQ?'quoteSendSheet':'openOrder')+'(\''+o.id+'\')"><span class="nm"><b>'+esc(o.ref)+
-      (active?' <span class="pill brand">picking</span>':'')+'</b><small>'+o.lines.length+' line'+(o.lines.length===1?'':'s')+' · '+
+      (active?' <span class="pill brand">picking</span>':'')+
+      (owes?' <span class="pill alert">owes</span>':(o.paidAt?' <span class="pill ok">paid</span>':''))+'</b><small>'+o.lines.length+' line'+(o.lines.length===1?'':'s')+' · '+
       esc(o.tracking||"no tracking")+'</small></span><span class="rt"><b>'+money(t.rev)+'</b>'+
       '<span class="pill '+pillClass+'">'+esc(o.status)+'</span></span></button>';
-  }).join("");
+  }).join("") + (doneN ? '<div style="text-align:center;margin-top:6px"><button class="pill" onclick="doneOrdersSheet()">Completed · '+doneN+'</button></div>' : "");
 }
 function renderActiveOrder(){
   const box = $("activeOrderBox");
@@ -4352,7 +4369,13 @@ function openOrder(id){
     '<div class="field"><label>Postage cost</label><input id="o_scost2" type="number" step="any" value="'+num(o.shipCost)+'"></div></div>'+
     '<div class="field"><label>Status</label><select id="o_status">'+
     ["open","packed","shipped"].map(s => '<option'+(o.status===s?' selected':'')+'>'+s+'</option>').join("")+'</select></div>'+
-    '<button class="btn full" style="margin-bottom:8px" onclick="paymentSheet(\''+o.id+'\')">Request payment \u00b7 '+money(t.rev)+'</button>'+
+    (o.paidAt
+      ? '<button class="btn full" style="margin-bottom:8px;border-color:#28503A;color:var(--ok)" onclick="togglePaid(\''+o.id+'\')">PAID \u2713 '+toDateInput(o.paidAt)+' \u00b7 tap to undo</button>'
+      : '<button class="btn full" style="margin-bottom:8px" onclick="paymentSheet(\''+o.id+'\')">Request payment \u00b7 '+money(t.rev)+'</button>'+
+        '<button class="btn full" style="margin-bottom:8px" onclick="togglePaid(\''+o.id+'\')">Mark paid \u00b7 '+money(t.rev)+'</button>')+
+    (o.status === "done"
+      ? '<button class="btn full" style="margin-bottom:8px" onclick="reopenOrder(\''+o.id+'\')">Completed \u2713 \u00b7 tap to reopen</button>'
+      : '<button class="btn full" style="margin-bottom:8px" onclick="completeOrder(\''+o.id+'\')">Complete &amp; close</button>')+
     '<button class="btn pri full" style="margin-bottom:8px" onclick="orderAddSheet(\''+o.id+'\')">Add products</button>'+
     '<div class="sheetact"><button class="btn" onclick="pickOrder(\''+o.id+'\')">Pick into this</button>'+
     '<button class="btn" onclick="shipSheet(\''+o.id+'\')">Ship</button>'+
@@ -4543,6 +4566,31 @@ function unpickFromLine(o, l, qtyBack){
   if(it) it.qty = num(it.qty) + (qtyBack - Math.max(0, left));
   return qtyBack - Math.max(0, left);
 }
+function togglePaid(id){
+  const o = S.orders.find(x => x.id === id); if(!o) return;
+  o.paidAt = o.paidAt ? null : Date.now();
+  save(); renderAll(); toast(o.paidAt ? "Marked paid" : "Marked unpaid");
+  openOrder(id);
+}
+function completeOrder(id){
+  const o = S.orders.find(x => x.id === id); if(!o) return;
+  if(!o.paidAt && !o._closeArmed){
+    o._closeArmed = true;
+    toast("Not marked paid \u2014 tap Complete again to close it unpaid");
+    return;
+  }
+  delete o._closeArmed;
+  o.status = "done";
+  if(S.activeOrder === id) S.activeOrder = null;
+  save(); renderAll(); toast("Order closed");
+  openOrder(id);
+}
+function reopenOrder(id){
+  const o = S.orders.find(x => x.id === id); if(!o) return;
+  o.status = o.tracking ? "shipped" : "open";
+  save(); renderAll(); toast("Reopened");
+  openOrder(id);
+}
 function removeLine(oid, ix){
   const o = S.orders.find(x => x.id === oid); if(!o) return;
   const l = o.lines[ix]; if(!l) return;
@@ -4625,7 +4673,7 @@ function periodReviewSheet(kind){
   });
   const writeoff = scraps.reduce((a,t) => a + num(t.qty)*num(t.cost), 0);
   const orderIds = new Set(outs.map(t => t.orderId).filter(Boolean));
-  const openOrders = S.orders.filter(o => o.status !== "shipped").length;
+  const openOrders = S.orders.filter(o => o.status !== "shipped" && o.status !== "done" && o.status !== "quote").length;
   const top = Object.entries(byItem).sort((a,b) => b[1].rev - a[1].rev).slice(0,5)
     .map(([iid, d]) => {
       const it = S.items.find(i => i.id === iid);
