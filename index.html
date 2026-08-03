@@ -323,7 +323,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1140-c411f7";
+const BUILD = "20260803-1204-ef1520";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1711,8 +1711,10 @@ function poWarnHTML(total){
 }
 function poLiveTotal(){
   let goods = 0, kits = 0, products = 0;
+  const priceOf = {};
+  document.querySelectorAll(".po_p").forEach(el => { priceOf[el.dataset.item] = num(el.value); });
   document.querySelectorAll(".po_k").forEach(el => {
-    goods += num(el.value) * num(el.dataset.price);
+    goods += num(el.value) * num(priceOf[el.dataset.item]);
     kits += num(el.value);
     if(num(el.value) > 0) products++;
   });
@@ -1742,38 +1744,47 @@ function poLinesRefresh(filter){
   const q = (filter||"").toLowerCase().trim();
   const sorted = S.items.slice().sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   const visible = q ? sorted.filter(i=>(i.name||"").toLowerCase().includes(q)||(i.code||"").toLowerCase().includes(q)) : sorted;
-  const prev = {};
+  const prev = {}, prevP = {};
   document.querySelectorAll(".po_k").forEach(el=>{ if(num(el.value)>0) prev[el.dataset.item]=el.value; });
+  document.querySelectorAll(".po_p").forEach(el=>{ if(el.value !== "") prevP[el.dataset.item]=el.value; });
   $("po_lines").innerHTML = visible.map(i => {
     const e = vendorEntryFor(sup, i.id);
     const p = e ? num(e.kitPrice) : null;
     const short = num(i.qty) <= num(i.reorder);
     const v = prev[i.id]||"0";
     const info = p != null
-      ? (e.cat ? esc(e.cat)+' \u00b7 ' : '') + money(p) + '/kit'
+      ? (e.cat ? esc(e.cat)+' \u00b7 ' : '') + 'list ' + money(p)
       : (() => { const o = bestOtherVendor(i.id, sup);
                  return o ? 'not on this vendor \u00b7 '+esc(o.sup.name)+' has it at '+money(o.price)
-                          : 'no vendor price'; })();
+                          : 'no vendor price \u2014 type it'; })();
     return '<div class="row'+(short?' low':'')+(num(v)>0?' po_row_active':'')+' po_row" id="por_'+i.id+'">'+
       '<span class="nm"><b>'+esc(i.name)+(short?' <span class="pill alert">low</span>':'')+'</b>'+
       '<small>'+num(i.qty)+' on hand \u00b7 '+info+'</small></span>'+
-      '<button class="pill" style="margin-left:4px;flex:none" onclick="openItem(\''+i.id+'\')">Edit</button>'+
-      '<span style="width:64px;flex:none"><input class="num po_k" data-item="'+i.id+'" data-price="'+(p||0)+
-      '" type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"></span></div>';
+      '<button class="pill" style="margin-left:4px;flex:none" onclick="openItem(\''+i.id+'\')">\u0045dit</button>'+
+      '<span style="width:74px;flex:none;margin-left:4px"><input class="num po_p" data-item="'+i.id+'" type="number" step="any" inputmode="decimal" '+
+      'value="'+(prevP[i.id] != null ? prevP[i.id] : (p != null ? p : ""))+'" placeholder="$/kit" style="text-align:center;padding:6px"></span>'+
+      '<span style="width:58px;flex:none;margin-left:4px"><input class="num po_k" data-item="'+i.id+'" '+
+      'type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"></span></div>';
   }).join("") + (lead ? '<p class="hint">Past orders from this vendor landed in about '+lead+' days.</p>' : '');
   document.querySelectorAll(".po_k").forEach(el => el.addEventListener("input", function(){
     poLiveTotal();
     const row = document.getElementById("por_"+this.dataset.item);
     if(row) row.classList.toggle("po_row_active", num(this.value) > 0);
   }));
+  document.querySelectorAll(".po_p").forEach(el => el.addEventListener("input", poLiveTotal));
   poLiveTotal();
 }
 function saveNewPO(){
   const lines = [];
+  const priceOf = {};
+  document.querySelectorAll(".po_p").forEach(el => { priceOf[el.dataset.item] = num(el.value); });
   document.querySelectorAll(".po_k").forEach(el => {
     const k = num(el.value);
-    if(k > 0) lines.push({itemId:el.dataset.item, kits:k, kitPrice:num(el.dataset.price)});
+    if(k > 0) lines.push({itemId:el.dataset.item, kits:k, kitPrice:num(priceOf[el.dataset.item])});
   });
+  if(lines.some(l => l.kitPrice <= 0)){
+    toast("A selected product has no $/kit \u2014 type its price"); return;
+  }
   if(!lines.length){ toast("Set a kit quantity"); return; }
   const po = {id:uid("p"), supplierId:$("po_sup").value,
               created: fromDateInput($("po_date").value, Date.now()),
