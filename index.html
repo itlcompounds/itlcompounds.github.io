@@ -323,7 +323,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1204-ef1520";
+const BUILD = "20260803-1210-2089a9";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -3882,8 +3882,8 @@ function wrapVialHTML(i, st){
   const fitted = W / (longest * 0.52);
   const nameSize = Math.min(nameH * (nameLines.length > 1 ? 0.46 : 0.88), fitted);
 
-  const lotSize = H * 0.115;
-  const rest = H - nameH - 0.5 - lotSize - 0.3;
+  const lotSize = H * 0.10;
+  const rest = H - nameH - 0.5;          // bottom text row removed — the QR is the code
   const qrW  = Math.min(rest, W * 0.27);
   const leftW = W - qrW - 1.2;
   const small = rest * 0.19;
@@ -3912,13 +3912,9 @@ function wrapVialHTML(i, st){
           (qr ? qr.replace("<svg ", '<svg style="width:100%;height:100%;display:block" ')
               : code128svg(code).replace("<svg ", '<svg style="width:100%;height:100%" '))+
         '</div>'+
+        (lot ? '<div style="font-size:'+lotSize+'mm;font-family:monospace;font-weight:700;line-height:1;'+
+          'white-space:nowrap">LOT '+esc(lot.code)+'</div>' : '')+
       '</div>'+
-    '</div>'+
-
-    // lot and scan code, larger than before: this is how two lots are told apart
-    '<div style="display:flex;justify-content:space-between;align-items:center;'+
-      'font-size:'+lotSize+'mm;font-family:monospace;font-weight:700;line-height:1;margin-top:.3mm">'+
-      '<span>'+(lot ? 'LOT '+esc(lot.code) : '')+'</span><span>'+esc(code)+'</span>'+
     '</div></div>';
 }
 // A basket card. Vials with pre-printed labels have no scannable code, so the
