@@ -125,6 +125,8 @@ main{padding:var(--pad);max-width:620px;margin:0 auto}
   background:var(--slate);border:1px solid var(--line);border-radius:4px;margin-bottom:6px;width:100%;text-align:left;
 }
 .row.low{border-left:3px solid var(--alert)}
+.po_row_active{background:rgba(59,130,246,.18) !important;border-left:4px solid var(--brand) !important;border-radius:6px;outline:2px solid var(--brand)}
+.po_row_active .nm b::before{content:"\2713  ";color:var(--brand);font-weight:700}
 .row .nm{flex:1;min-width:0}
 .row .nm b{font-family:var(--cond);font-weight:600;font-size:16px;letter-spacing:.02em;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .nm small{color:var(--muted);font-family:var(--mono);font-size:11px}
@@ -321,7 +323,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-1054-968ece";
+const BUILD = "20260803-1100-272078";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1642,10 +1644,11 @@ function poWarnHTML(total){
     '<p class="hint">Crypto payment on an international parcel means no chargeback, no insurance, no recourse. A seizure is a total loss, so the freight saved by consolidating is not worth the single point of failure.</p>';
 }
 function poLiveTotal(){
-  let goods = 0, kits = 0;
+  let goods = 0, kits = 0, products = 0;
   document.querySelectorAll(".po_k").forEach(el => {
     goods += num(el.value) * num(el.dataset.price);
     kits += num(el.value);
+    if(num(el.value) > 0) products++;
   });
   const sup = S.suppliers.find(x => x.id === ($("po_sup") ? $("po_sup").value : ""));
   const optIx = num($("po_opt") ? $("po_opt").value : 0);
@@ -1657,7 +1660,7 @@ function poLiveTotal(){
   const tot = $("po_total"); if(tot) tot.textContent = money(total);
   const note = $("po_terms");
   if(note) note.innerHTML = kits
-    ? kits+' kit'+(kits===1?'':'s')+' · goods '+money(goods)+
+    ? '<b>'+products+' product'+(products===1?'':'s')+' selected</b> · '+kits+' kit'+(kits===1?'':'s')+' · goods '+money(goods)+
       (ship ? ' + ship '+money(ship) : ' · free shipping')+
       (disc < 1 ? ' · '+Math.round((1-disc)*100)+'% off'+(newPODisc===1&&auto<1?' (volume)':'') : '')
     : "";
