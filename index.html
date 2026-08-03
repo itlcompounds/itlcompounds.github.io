@@ -125,7 +125,6 @@ main{padding:var(--pad);max-width:620px;margin:0 auto}
   background:var(--slate);border:1px solid var(--line);border-radius:4px;margin-bottom:6px;width:100%;text-align:left;
 }
 .row.low{border-left:3px solid var(--alert)}
-.po_row_active{border-left:3px solid var(--brand);background:rgba(59,130,246,.08)}
 .row .nm{flex:1;min-width:0}
 .row .nm b{font-family:var(--cond);font-weight:600;font-size:16px;letter-spacing:.02em;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .nm small{color:var(--muted);font-family:var(--mono);font-size:11px}
@@ -151,7 +150,7 @@ nav button[aria-current="true"]::before{content:"";position:absolute;top:0;left:
 nav .dot{position:absolute;top:6px;right:calc(50% - 22px);width:6px;height:6px;border-radius:50%;background:var(--alert)}
 
 /* ---- sheet ---- */
-.sheet{position:fixed;inset:0;z-index:90;background:rgba(6,10,12,.72);display:none;align-items:flex-end}
+.sheet{position:fixed;inset:0;z-index:60;background:rgba(6,10,12,.72);display:none;align-items:flex-end}
 .sheet.on{display:flex}
 .sheet .panel{
   background:var(--ink);border-top:1px solid var(--brand-dim);width:100%;max-height:92vh;overflow:auto;
@@ -166,7 +165,6 @@ nav .dot{position:absolute;top:6px;right:calc(50% - 22px);width:6px;height:6px;b
 .costtot{display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid var(--line);margin-top:10px;padding-top:10px;font-family:var(--mono)}
 .costtot b{font-size:20px;color:var(--brand)}
 .sheetact{display:flex;gap:8px;margin-top:14px}
-.po_row_active{background:var(--brand-dim,rgba(59,130,246,.15));border-radius:6px;outline:1px solid var(--brand)}
 .sheetact .btn{flex:1;text-align:center}
 video{width:100%;border-radius:4px;background:#000;display:block}
 .toast{
@@ -322,7 +320,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-0947-708c08";
+const BUILD = "20260803-1009-6c1d9d";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -331,16 +329,6 @@ const BUILD = "20260803-0947-708c08";
  * quota will throw, and a storage failure must never take the app down —
  * without it the app still runs, it just leans entirely on sync.
  */
-function __itlRun(fn){
-  if(typeof fn === 'function'){ fn(); return; }
-  // Parse "funcName('arg')" or "funcName()" from the string
-  const m = String(fn).match(/^\s*(\w+)\s*\(\s*[\'\"\u201c]?([^\'\"\'\u201d]*?)[\'\"\u201d]?\s*\)\s*;?\s*$/);
-  if(m && typeof window[m[1]] === 'function'){
-    window[m[1]](m[2] || undefined);
-  } else {
-    console.error('__itlRun: could not dispatch', fn);
-  }
-}
 const store = (function(){
   let ok = false;
   try{
@@ -806,19 +794,17 @@ async function stationGet(path){
   if(!r.ok) throw new Error("HTTP " + r.status);
   return r.json();
 }
-const DEFAULT_SYNC = "https://itl-ops-rates.itlcompounds.workers.dev";
 function syncURL(){
-  const u = (S.settings.syncUrl||"").trim() || DEFAULT_SYNC;
+  const u = (S.settings.syncUrl||"").trim();
+  if(!u) return "";
   return u.replace(/\/+$/,"") + "/sync";
 }
 function syncHeaders(){
   return {"Content-Type":"application/json", "X-ITLOps-Key": S.settings.rateKey || ""};
 }
 function loginGate(){
-  // A fresh device has no key and no data. Ask for the password once, verify it
-  // against the Worker, store it, pull. Never shown again on this device.
   if((S.settings.rateKey||"").trim()) return;
-  if(S.items.length || S.lots.length || S.orders.length) return; // offline work exists; don't block it
+  if(S.items.length || S.lots.length || S.orders.length) return;
   const d = document.createElement("div");
   d.id = "loginGate";
   d.style.cssText = "position:fixed;inset:0;z-index:99999;background:#101214;display:flex;align-items:center;justify-content:center";
@@ -837,7 +823,7 @@ function loginGate(){
   async function go(){
     const v = pw.value.trim();
     if(!v){ msg.textContent = "Enter the password"; return; }
-    msg.style.color = "#9ca3af"; msg.textContent = "Checking\u2026";
+    msg.style.color = "#9ca3af"; msg.textContent = "Checking…";
     try{
       const r = await fetch(syncURL(), {headers:{"Content-Type":"application/json","X-ITLOps-Key":v}});
       if(r.status === 401 || r.status === 403){ msg.style.color = "#f87171"; msg.textContent = "Wrong password"; pw.select(); return; }
@@ -848,10 +834,10 @@ function loginGate(){
       d.remove();
       const ok = await pullSync(true);
       renderAll();
-      toast(ok ? ("Data loaded \u2014 revision " + (S.settings.syncRev||"?")) : "Signed in \u2014 nothing stored remotely yet");
+      toast(ok ? ("Data loaded — revision " + (S.settings.syncRev||"?")) : "Signed in — nothing stored remotely yet");
     }catch(e){
       msg.style.color = "#f87171";
-      msg.textContent = "Can\u2019t reach the server \u2014 check your connection";
+      msg.textContent = "Can’t reach the server — check your connection";
     }
   }
   d.querySelector("#lg_go").addEventListener("click", go);
@@ -1001,8 +987,8 @@ function syncSheet(){
     (hasLocalStore ? '' : '<div class="astrip" style="border:1px solid #4A2C29;border-radius:4px;margin-bottom:10px">'+
       '<span class="t">This copy has no local storage — set up sync or your data will not survive a reload</span></div>')+
     '<p class="hint" style="margin-top:-2px">Points at the same Worker as your carrier rates. Your data lives there, so a phone in a car and a laptop at the bench see one shared copy.</p>'+
-    '<div class="field"><label>Password</label><input id="sy_key" type="password" autocomplete="current-password" value="'+esc(S.settings.rateKey||"")+'"></div>'+
-    '<div class="field"><label>Worker URL (advanced \u2014 blank uses the default)</label><input id="sy_url" value="'+esc(S.settings.syncUrl||S.settings.rateUrl||"")+'" placeholder="'+DEFAULT_SYNC+'"></div>'+
+    '<div class="field"><label>Worker URL</label><input id="sy_url" value="'+esc(S.settings.syncUrl||S.settings.rateUrl||"")+'" placeholder="https://rates.yourdomain.workers.dev"></div>'+
+    '<div class="field"><label>Shared key</label><input id="sy_key" value="'+esc(S.settings.rateKey||"")+'"></div>'+
     '<div class="field"><label>Bench station — scale &amp; printer (optional)</label>'+
       '<input id="sy_st" value="'+esc(S.settings.stationUrl||"")+'" placeholder="http://itlops.local:8080"></div>'+
     '<p class="hint" style="margin-top:-4px">Leave the Worker as the sync address. Data never depends on the Pi being awake.</p>'+
@@ -1396,7 +1382,7 @@ function openCust(id){
     (c.phone ? '<a class="btn full" style="margin-bottom:8px" href="'+waLink(c.phone,"")+'" target="_blank" rel="noopener">WhatsApp them</a>' : '')+
     '<div class="sheetact"><button class="btn" onclick="closeSheet()">Close</button>'+
     '<button class="btn pri" onclick="saveCust(\''+id+'\')">Save</button></div>'+
-    dangerZone("Delete customer", "askDeleteCust(\''+id+'\')"));
+    dangerZone("Delete customer", () => askDeleteCust(id)));
 }
 function saveCust(id){
   const c = S.customers.find(x => x.id === id); if(!c) return;
@@ -1408,7 +1394,7 @@ function askDeleteCust(id){
   confirmDelete("Delete "+esc(c.name)+"?",
     n ? n+" order"+(n===1?"":"s")+" will lose their contact details, which breaks the recall trail back to this person."
       : "No orders are linked to them.",
-    "deleteCust('"+id+"')", "openCust('"+id+"')");
+    () => deleteCust(id), () => openCust(id));
 }
 function deleteCust(id){
   S.customers = S.customers.filter(x => x.id !== id);
@@ -1630,7 +1616,7 @@ function newPOSheet(){
     '<div class="field"><label>Vendor</label><select id="po_sup" onchange="poLinesRefresh()">'+
       S.suppliers.map(s => '<option value="'+s.id+'">'+esc(s.name)+'</option>').join("")+'</select></div>'+
     '<div class="eyebrow" style="margin:12px 0 6px">Kits to order</div>'+
-    '<input id="po_search" type="search" placeholder="Search products…" style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px" oninput="poLinesRefresh(this.value)">'+
+    '<input id="po_search" type="search" placeholder="Search products…" oninput="poLinesRefresh(this.value)" style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px">'+
     '<div id="po_lines"></div>'+
     '<div id="po_warn"></div>'+
     '<p class="hint" style="text-align:right">Order value <b class="num" id="po_total">$0.00</b></p>'+
@@ -1683,21 +1669,20 @@ function poLinesRefresh(filter){
     '<option value="'+i+'">'+esc(o.name||("Option "+(i+1)))+(num(o.add)?' (+'+money(num(o.add))+')':'')+'</option>').join("");
   const lead = avgLead(sup);
   const q = (filter||"").toLowerCase().trim();
-  const sorted = S.items.slice().sort((a,b) => (a.name||"").localeCompare(b.name||""));
-  const visible = q ? sorted.filter(i => (i.name||"").toLowerCase().includes(q) || (i.code||"").toLowerCase().includes(q)) : sorted;
+  const sorted = S.items.slice().sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  const visible = q ? sorted.filter(i=>(i.name||"").toLowerCase().includes(q)||(i.code||"").toLowerCase().includes(q)) : sorted;
   const prev = {};
-  document.querySelectorAll(".po_k").forEach(el => { if(num(el.value)>0) prev[el.dataset.item]=el.value; });
+  document.querySelectorAll(".po_k").forEach(el=>{ if(num(el.value)>0) prev[el.dataset.item]=el.value; });
   $("po_lines").innerHTML = visible.map(i => {
     const p = vendorPriceFor(sup, i.id);
     const short = num(i.qty) <= num(i.reorder);
     const v = prev[i.id]||"0";
-    const active = num(v)>0;
-    return '<div class="row'+(short?' low':'')+(active?' po_row_active':'')+' po_row" id="por_'+i.id+'"><span class="nm"><b>'+esc(i.name)+
-      (short?' <span class="pill alert">low</span>':'')+'</b><small>'+num(i.qty)+' on hand'+
-      (p!=null?' · \u2019'+money(p)+'/kit':' · no price on file')+'</small></span>'+
+    return '<div class="row'+(short?' low':'')+(num(v)>0?' po_row_active':'')+' po_row" id="por_'+i.id+'">'+
+      '<span class="nm"><b>'+esc(i.name)+(short?' <span class="pill alert">low</span>':'')+'</b>'+
+      '<small>'+num(i.qty)+' on hand'+(p!=null?' · '+money(p)+'/kit':' · no price on file')+'</small></span>'+
+      '<button class="pill" style="margin-left:4px;flex:none" onclick="openItem(\''+i.id+'\')">Edit</button>'+
       '<span style="width:64px;flex:none"><input class="num po_k" data-item="'+i.id+'" data-price="'+(p||0)+
-      '" type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"></span>'+
-      '<button class="pill" style="margin-left:4px;flex:none" onclick="openItem(\''+i.id+'\')">Edit</button></div>';
+      '" type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"></span></div>';
   }).join("") + (lead ? '<p class="hint">Past orders from this vendor landed in about '+lead+' days.</p>' : '');
   document.querySelectorAll(".po_k").forEach(el => el.addEventListener("input", function(){
     poLiveTotal();
@@ -1793,7 +1778,7 @@ function openPO(id){
     '<button class="btn pri full" style="margin-top:8px" onclick="receivePO(\''+id+'\')">Receive into stock</button>'+
     '<div class="sheetact"><button class="btn" onclick="closeSheet()">Close</button>'+
     '<button class="btn pri" onclick="savePO(\''+id+'\')">Save</button></div>'+
-    dangerZone("Delete purchase", "askDeletePO(\''+id+'\')"));
+    dangerZone("Delete purchase", () => askDeletePO(id)));
 }
 function readPO(po){
   po.fees = num($("po_fees").value); po.shipping = num($("po_ship").value);
@@ -1821,10 +1806,10 @@ function setPOStatus(id, st){
 function askDeletePO(id){
   const po = S.pos.find(x => x.id === id); if(!po) return;
   const lots = S.lots.filter(l => l.poId === id).length;
-  const msg = money(poLanded(po))+" of order history goes, including the lead time it contributes to reorder points."+
-    (lots ? " The "+lots+" lot"+(lots===1?"":"s")+" it created stay, but lose their link back." : "");
-  confirmDelete("Delete this purchase?", msg,
-    "deletePO('"+id+"')", "openPO('"+id+"')");
+  confirmDelete("Delete this purchase?",
+    money(poLanded(po))+" of order history goes, including the lead time it contributes to reorder points."+
+    (lots ? " The "+lots+" lot"+(lots===1?"":"s")+" it created stay, but lose their link back." : ""),
+    () => deletePO(id), () => openPO(id));
 }
 function deletePO(id){
   S.pos = S.pos.filter(x => x.id !== id); save(); closeSheet(); renderAll(); toast("Deleted");
@@ -3234,7 +3219,7 @@ function openSupplier(id){
       (s.pricesAt?' · '+Math.round((Date.now()-s.pricesAt)/86400000)+'d old':'')+'</button>'+
     '<div class="sheetact"><button class="btn" onclick="closeSheet()">Close</button>'+
     '<button class="btn pri" onclick="saveSupplier(\''+s.id+'\')">Save</button></div>'+
-    dangerZone("Delete vendor", "askDeleteSupplier(\''+s.id+'\')"));
+    dangerZone("Delete vendor", () => askDeleteSupplier(s.id)));
 }
 function saveSupplier(id){
   const s = S.suppliers.find(x => x.id === id); if(!s) return;
@@ -3252,7 +3237,7 @@ function askDeleteSupplier(id){
     "This removes "+priced+" imported prices, their shipping and discount terms, and unlinks "+
     lots+" lot"+(lots===1?"":"s")+" and "+pos+" purchase"+(pos===1?"":"s")+
     ". Cost history stays, but you lose which vendor it came from.",
-    "deleteSupplier('"+id+"')", "openSupplier('"+id+"')");
+    () => deleteSupplier(id), () => openSupplier(id));
 }
 function deleteSupplier(id){
   S.suppliers = S.suppliers.filter(x => x.id !== id);
@@ -3330,19 +3315,21 @@ function wireFilePicker(id, cb){
 // the parent, so a double tap used to be enough to lose a vendor.
 function dangerZone(label, fn){
   const bid = 'dz_' + Math.random().toString(36).slice(2,10);
-  window.__itlHandlers = window.__itlHandlers || {};
-  window.__itlHandlers[bid] = fn;
-  setTimeout(() => {
-    const b = document.getElementById(bid);
-    if(b) b.onclick = () => __itlRun(window.__itlHandlers[bid]);
-  }, 0);
+  window.__itlH = window.__itlH || {};
+  window.__itlH[bid] = fn;
+  setTimeout(() => { const b = document.getElementById(bid); if(b) b.onclick = window.__itlH[bid]; }, 0);
   return '<div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line)">'+
     '<button id="'+bid+'" class="btn warn full">'+label+'</button></div>';
 }
 function confirmDelete(title, detail, fn, backFn){
-  window.__itlHandlers = window.__itlHandlers || {};
-  window.__itlHandlers['cdFn'] = fn;
-  window.__itlHandlers['cdBack'] = backFn || closeSheet;
+  window.__itlH = window.__itlH || {};
+  const coerce = f => typeof f === 'function' ? f : () => {
+    const m = String(f).match(/^\s*(\w+)\s*\(\s*['"]?([^'"]*?)['"]?\s*\)\s*;?\s*$/);
+    if(m && typeof window[m[1]] === 'function') window[m[1]](m[2] || undefined);
+    else console.error('confirmDelete: cannot run', f);
+  };
+  window.__itlH['cdFn'] = coerce(fn);
+  window.__itlH['cdBack'] = coerce(backFn || closeSheet);
   sheet('<h2>'+title+'</h2>'+
     '<p class="hint">'+detail+'</p>'+
     '<button class="btn pri full" style="margin-bottom:8px" id="cdKeep">Keep it</button>'+
@@ -3350,14 +3337,13 @@ function confirmDelete(title, detail, fn, backFn){
   setTimeout(() => {
     const k = document.getElementById('cdKeep');
     const d = document.getElementById('cdDel');
-    if(k) k.onclick = () => __itlRun(window.__itlHandlers['cdBack']);
-    if(d) d.onclick = () => __itlRun(window.__itlHandlers['cdFn']);
+    if(k) k.onclick = window.__itlH['cdBack'];
+    if(d) d.onclick = window.__itlH['cdFn'];
   }, 0);
 }
 function sheet(html){
   const panel = $("sheetPanel");
   panel.innerHTML = html;
-  // Move any delete button (dangerZone output) to the top, before the h2
   const dz = panel.querySelector('[id^="dz_"]');
   const h2 = panel.querySelector('h2');
   if(dz && h2) panel.insertBefore(dz.parentNode, h2);
@@ -3982,7 +3968,7 @@ function openLot(id){
     '<div class="sheetact"><button class="btn" onclick="traceSheet(\''+id+'\')">Trace</button>'+
     '<button class="btn" onclick="scrapSheet(\''+id+'\')">Write off</button>'+
     '<button class="btn pri" onclick="saveLot(\''+id+'\')">Save</button></div>'+
-    dangerZone("Delete lot", "askDeleteLot(\''+id+'\')"));
+    dangerZone("Delete lot", () => askDeleteLot(id)));
   wireLotCalc();
 }
 function saveLot(id){
@@ -3995,7 +3981,7 @@ function askDeleteLot(id){
   confirmDelete("Delete lot "+esc(l.code)+"?",
     "Its landed cost disappears from every margin figure, and "+shipped+
     " vial"+(shipped===1?"":"s")+" already shipped from it become untraceable. On-hand counts are not adjusted.",
-    "deleteLot('"+id+"')", "openLot('"+id+"')");
+    () => deleteLot(id), () => openLot(id));
 }
 function deleteLot(id){
   S.lots = S.lots.filter(x => x.id !== id);
@@ -4045,7 +4031,7 @@ function openOrder(id){
     '<div class="sheetact"><button class="btn" onclick="pickOrder(\''+o.id+'\')">Pick into this</button>'+
     '<button class="btn" onclick="shipSheet(\''+o.id+'\')">Ship</button>'+
     '<button class="btn pri" onclick="saveOrder(\''+o.id+'\')">Save</button></div>'+
-    dangerZone("Delete order", "askDeleteOrder(\''+o.id+'\')"));
+    dangerZone("Delete order", () => askDeleteOrder(o.id)));
 }
 function saveOrder(id, quiet){
   const o = S.orders.find(x => x.id === id); if(!o) return;
@@ -4062,16 +4048,13 @@ function saveOrder(id, quiet){
 }
 function askDeleteOrder(id){
   const o = S.orders.find(x => x.id === id); if(!o) return;
-  const vials = S.txns.filter(t => t.orderId === id && t.dir === "out")
-                      .reduce((s,t) => s + num(t.qty), 0);
+  const vials = S.txns.filter(t => t.orderId === id && t.dir === "out").reduce((a,t)=>a+num(t.qty),0);
   confirmDelete("Delete " + esc(o.ref) + "?",
-    vials ? vials + " vial" + (vials===1?"":"s") + " go back into the lots they came from, and this sale disappears from the month\u2019s numbers."
+    vials ? vials + " vial" + (vials===1?"":"s") + " go back into the lots they came from, and this sale disappears from the month’s numbers."
           : "Nothing was picked into it, so nothing else changes.",
-    "deleteOrder('"+id+"')", "openOrder('"+id+"')");
+    () => deleteOrder(id), () => openOrder(id));
 }
 function deleteOrder(id){
-  // Reverse the order's movements exactly: each vial returns to the lot it
-  // left, and the out-movements are dropped so no phantom revenue lingers.
   S.txns.filter(t => t.orderId === id && t.dir === "out").forEach(t => {
     const it = S.items.find(i => i.id === t.itemId);
     if(it) it.qty = num(it.qty) + num(t.qty);
@@ -4081,7 +4064,7 @@ function deleteOrder(id){
   S.txns = S.txns.filter(t => !(t.orderId === id && t.dir === "out"));
   S.orders = S.orders.filter(x => x.id !== id);
   if(S.activeOrder === id) S.activeOrder = null;
-  save(); closeSheet(); renderAll(); toast("Order deleted \u2014 stock restored");
+  save(); closeSheet(); renderAll(); toast("Order deleted — stock restored");
 }
 function pickOrder(id){
   S.activeOrder = id; mode = "out"; setMode();
@@ -5288,7 +5271,6 @@ on("addPOBtn", "click", newPOSheet);
 on("addLotBtn", "click", newLotSheet);
 on("dupLotBtn", "click", dupLotsSheet);
 function dupLotsSheet(){
-  // Find lots sharing the same itemId — most likely cause of accidental duplicates.
   const byItem = {};
   S.lots.forEach(l => { (byItem[l.itemId]=byItem[l.itemId]||[]).push(l); });
   const dupes = Object.entries(byItem).filter(([,ls])=>ls.length>1);
@@ -5296,17 +5278,29 @@ function dupLotsSheet(){
   const rows = dupes.map(([itemId, ls]) => {
     const it = S.items.find(i=>i.id===itemId);
     return '<div style="margin-bottom:16px"><div class="eyebrow" style="margin-bottom:6px">'+esc(it?it.name:"unknown")+'</div>'+
-      ls.map(l => '<div class="row" style="margin-bottom:4px"><span class="nm"><b>'+esc(l.code)+'</b>'+
-        '<small>'+num(l.remaining)+' left · cost '+money(lotUnitCost(l))+'</small></span>'+
-        '<span class="rt"><button class="pill" onclick="openLot(\''+l.id+'\');">Edit</button>'+
-        '<button class="pill" style="margin-left:4px;color:var(--alert)" onclick="askDeleteLot(\''+l.id+'\');">Delete</button></span></div>'
-      ).join("")+'</div>';
+      ls.map(l => {
+        const bid = 'dup_'+l.id;
+        window.__itlH = window.__itlH||{};
+        window.__itlH[bid] = () => askDeleteLot(l.id);
+        return '<div class="row" style="margin-bottom:4px"><span class="nm"><b>'+esc(l.code)+'</b>'+
+          '<small>'+num(l.remaining)+' left · cost '+money(lotUnitCost(l))+'</small></span>'+
+          '<span class="rt">'+
+          '<button class="pill" onclick="openLot(\''+l.id+'\')">Edit</button> '+
+          '<button class="pill" id="'+bid+'" style="color:var(--alert)">Delete</button>'+
+          '</span></div>';
+      }).join("")+'</div>';
   }).join("");
   sheet('<h2>Duplicate lots</h2>'+
-    '<p class="hint">These products have more than one lot. Keep the one with the right cost and remaining count; delete the extra. Stock counts are not automatically adjusted when you delete.</p>'+
+    '<p class="hint">Keep the lot with the right cost and remaining count; delete the extra. Stock counts are not auto-adjusted on delete.</p>'+
     rows+
     '<div class="sheetact"><button class="btn pri full" onclick="closeSheet()">Done</button></div>');
+  setTimeout(()=>{
+    Object.keys(window.__itlH||{}).filter(k=>k.startsWith('dup_')).forEach(k=>{
+      const b=document.getElementById(k); if(b) b.onclick=window.__itlH[k];
+    });
+  },0);
 }
+
 on("addOrderBtn", "click", newOrderSheet);
 on("addQuoteBtn", "click", newQuote);
 on("addCustBtn", "click", () => newCustSheet(null));
