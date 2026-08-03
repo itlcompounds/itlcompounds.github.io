@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-2044-ec4b32";
+const BUILD = "20260803-2139-cd8bcc";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4459,14 +4459,16 @@ function orderAddSheet(orderId, filter){
     .sort((a,b) => (num(b.qty)>0)-(num(a.qty)>0) ||
                    String(a.name||"").localeCompare(String(b.name||""),undefined,{numeric:true}));
   const rows = pool.map(i => {
-    const sell = priceFor(i, tier, 1);
+    const listP = priceFor(i, tier, 1);
+    const sell = listP > 0 ? listP : +(suggestedPrice(i)||0).toFixed(2);
     const v = prev[i.id] || "0";
     const out = num(i.qty) <= 0;
     const pv = prevP[i.id] != null ? prevP[i.id] : (sell > 0 ? sell : "");
     const lbl = t => '<small style="display:block;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-align:center;margin-bottom:2px">'+t+'</small>';
     return '<div class="row'+(num(v)>0?' po_row_active':'')+' po_row" id="oar_'+i.id+'">'+
       '<span class="nm"><b>'+esc(i.name)+'</b>'+
-      '<small><b>'+esc(i.code||"")+'</b> \u00b7 '+num(i.qty)+' on hand'+(out?' \u00b7 OUT':'')+(sell>0?' \u00b7 list '+money(sell):'')+'</small></span>'+
+      '<small><b>'+esc(i.code||"")+'</b> \u00b7 '+num(i.qty)+' on hand'+(out?' \u00b7 OUT':'')+
+        (listP>0?' \u00b7 list '+money(listP): sell>0?' \u00b7 suggested '+money(sell):'')+'</small></span>'+
       '<span style="display:flex;gap:6px;align-items:flex-end;margin-left:auto">'+
       '<span style="width:58px;flex:none">'+lbl('vials')+'<input class="num oa_q" data-item="'+i.id+'" '+
       'type="number" inputmode="numeric" min="0" step="1" value="'+v+'" style="text-align:center;padding:6px"'+(out?' disabled':'')+'></span>'+
@@ -5218,7 +5220,8 @@ function renderQuoteFind(){
   if(!f){ box.innerHTML = '<p class="hint">Search by name or code.</p>'; return; }
   const hits = S.items.filter(i =>
     (i.name||"").toLowerCase().indexOf(f) >= 0 || (i.code||"").toLowerCase().indexOf(f) >= 0)
-    .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""),undefined,{numeric:true})).slice(0,25);
+    .sort((a,b)=> (num(b.qty)>0)-(num(a.qty)>0) ||
+                  String(a.name||"").localeCompare(String(b.name||""),undefined,{numeric:true})).slice(0,25);
   box.innerHTML = hits.length ? hits.map(i =>
     (() => {
       const cc = quoteCost(i.id);
@@ -5237,7 +5240,12 @@ function addQLine(itemId){
   const it = S.items.find(i => i.id === itemId);
   const hit = q.lines.find(l => l.itemId === itemId);
   if(hit) hit.qty = num(hit.qty) + 1;
-  else q.lines.push({itemId, qty:1, price:num(it && it.price)});
+  else {
+    // No memorising price lists: an unpriced product quotes itself at
+    // cost × your markup until you set (or lock) a real retail price.
+    const p0 = num(it && it.price) || +(suggestedPrice(it)||0).toFixed(2);
+    q.lines.push({itemId, qty:1, price:p0});
+  }
   quoteFilter = "";
   save(); openQuote(q.id);
 }
