@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-2139-cd8bcc";
+const BUILD = "20260803-2214-c2b453";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4002,10 +4002,10 @@ function brandMark(h, small, tagline){
       : '')+
   '</div>';
 }
-function wrapVialHTML(i, st){
+function wrapVialHTML(i, st, lotPick){
   const pad = 1.2, W = st.w - pad*2, H = st.h - pad*2;
 
-  const lot = S.lots.filter(l => l.itemId === i.id && num(l.remaining) > 0)[0];
+  const lot = lotPick || S.lots.filter(l => l.itemId === i.id && num(l.remaining) > 0)[0];
   const code = (i.code || "") + "-01";
   const qr = qrSvg(code);
   const tagline = S.settings.tagline === undefined ? "IN THE LAB\nCOMPOUNDS" : S.settings.tagline;
@@ -4109,12 +4109,12 @@ function cardHTML(i, st){
         '</div>').join("")+
     '</div></div>';
 }
-function productLabelHTML(i, kind, stockKey){
+function productLabelHTML(i, kind, stockKey, lotPick){
   const st = LABEL_STOCK[stockKey] || LABEL_STOCK["40x20"];
   if(kind === "card") return cardHTML(i, LABEL_STOCK["50x30"]);
-  if(kind === "vial" && st.wrap) return wrapVialHTML(i, st);
+  if(kind === "vial" && st.wrap) return wrapVialHTML(i, st, lotPick);
   const base = i.code || "";
-  const lot = S.lots.filter(l => l.itemId === i.id && num(l.remaining) > 0)[0];
+  const lot = lotPick || S.lots.filter(l => l.itemId === i.id && num(l.remaining) > 0)[0];
   const pad = 1.5, inner = st.h - pad*2;
   let codeVal, right;
 
@@ -4196,18 +4196,92 @@ function labelSheet(id, kind, stockKey){
           '</div></div>'
       : '')+
     '<p class="hint" style="margin-top:10px">'+notes[kind]+'</p>'+
+    '<div class="field"><label>Copies</label><input id="lb_n" type="number" inputmode="numeric" min="1" max="200" value="10"></div>'+
     '<div class="sheetact"><button class="btn" onclick="openItem(\''+id+'\')">Back</button>'+
     '<button class="btn" onclick="brandSheet(\''+id+'\',\''+kind+'\',\''+stockKey+'\')">'+(LOGO?"Logo":"+ Logo")+'</button>'+
-    '<button class="btn pri" onclick="printProductLabel(\''+id+'\',\''+kind+'\',\''+stockKey+'\')">Print</button></div>'+
-    '<p class="hint" style="margin-top:10px">Printing from here needs the printer installed as a system printer. If you drive the M2 from the NIIMBOT app instead, screenshot this preview and import it there.</p>');
+    '<button class="btn" onclick="labelJpg(\''+id+'\',\''+kind+'\',\''+stockKey+'\')">JPG</button>'+
+    '<button class="btn pri" onclick="printProductLabel(\''+id+'\',\''+kind+'\',\''+stockKey+'\', document.getElementById(\'lb_n\').value)">Print</button></div>'+
+    '<button class="btn full" style="margin-top:8px" onclick="exportLabelJPG(\''+id+'\',\''+kind+'\',\''+stockKey+'\')">Save JPG for NIIMBOT</button>'+
+    '<p class="hint" style="margin-top:10px">Print needs a system printer. JPG saves this exact label at true size (300 dpi) \u2014 import it in the NIIMBOT app on '+st.w+'\u00d7'+st.h+' mm stock, set copies there, print.</p>');
 }
-function printProductLabel(id, kind, stockKey){
+function labelJpg(id, kind, stockKey, lotId){
   const i = S.items.find(x => x.id === id); if(!i) return;
   const st = LABEL_STOCK[stockKey] || LABEL_STOCK["50x30"];
+  const lotPick = lotId ? S.lots.find(l => l.id === lotId) : null;
+  const DPI = 300;                                   // the M2 prints at 300 dpi
+  const W = Math.round(st.w / 25.4 * DPI);
+  const H = Math.round(st.h / 25.4 * DPI);
+  const inner = productLabelHTML(i, kind, stockKey, lotPick);
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'" viewBox="0 0 '+st.w+' '+st.h+'">'+
+    '<foreignObject width="'+st.w+'" height="'+st.h+'">'+
+      '<div xmlns="http://www.w3.org/1999/xhtml" style="width:'+st.w+'mm;height:'+st.h+'mm;background:#fff">'+inner+'</div>'+
+    '</foreignObject></svg>';
+  const url = URL.createObjectURL(new Blob([svg], {type:"image/svg+xml;charset=utf-8"}));
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement("canvas");
+    c.width = W; c.height = H;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);   // JPEG has no transparency
+    ctx.drawImage(img, 0, 0, W, H);
+    URL.revokeObjectURL(url);
+    const jpg = c.toDataURL("image/jpeg", 0.95);
+    if(jpg.length < 2000){ toast("Export came out blank \u2014 tell Claude which browser you\u2019re on"); return; }
+    const a = document.createElement("a");
+    a.href = jpg;
+    a.download = (i.code || "label") + "-" + kind + "-" + stockKey + (lotPick ? "-" + lotPick.code : "") + ".jpg";
+    document.body.appendChild(a); a.click(); a.remove();
+    toast("Saved \u2014 import into NIIMBOT at " + st.w + "\u00d7" + st.h + " mm and print");
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); toast("Export failed \u2014 tell Claude which browser you\u2019re on"); };
+  img.src = url;
+}
+function exportLabelJPG(id, kind, stockKey, lotId){
+  const i = S.items.find(x => x.id === id); if(!i) return;
+  const st = LABEL_STOCK[stockKey] || LABEL_STOCK["40x20"];
+  const lot = lotId ? S.lots.find(l => l.id === lotId) : null;
+  // 300 dpi = the M2's print head. Pixel-exact for NIIMBOT image import.
+  const DPI = 300, PXMM = DPI / 25.4;
+  const W = Math.round(st.w * PXMM), H = Math.round(st.h * PXMM);
+  const cssMM = 96 / 25.4;                      // browser CSS treats 1mm as 96dpi
+  const zoom = PXMM / cssMM;                    // upscale factor for a crisp raster
+  const inner = productLabelHTML(i, kind, stockKey, lot);
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'">'+
+    '<foreignObject width="100%" height="100%">'+
+    '<div xmlns="http://www.w3.org/1999/xhtml" style="width:'+st.w+'mm;height:'+st.h+'mm;'+
+      'background:#fff;overflow:hidden;zoom:'+zoom+'">'+inner+'</div>'+
+    '</foreignObject></svg>';
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement("canvas");
+    c.width = W; c.height = H;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);   // JPG has no alpha \u2014 paint the paper
+    ctx.drawImage(img, 0, 0, W, H);
+    c.toBlob(b => {
+      if(!b){ toast("Export failed \u2014 try the print preview instead"); return; }
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(b);
+      a.download = (i.code || "label")
+        + (lot ? "_" + lot.code : "")
+        + "_" + st.w + "x" + st.h + "mm_300dpi.jpg";
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+      toast("Saved \u2014 import it in the NIIMBOT app and set copies there");
+    }, "image/jpeg", 0.95);
+  };
+  img.onerror = () => toast("Could not render the label \u2014 use the print preview");
+  img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+function printProductLabel(id, kind, stockKey, copies, lotId){
+  const i = S.items.find(x => x.id === id); if(!i) return;
+  const st = LABEL_STOCK[stockKey] || LABEL_STOCK["50x30"];
+  const n = Math.max(1, Math.min(200, num(copies) || 1));
+  const lotPick = lotId ? S.lots.find(l => l.id === lotId) : null;
   S.settings.stockFor = S.settings.stockFor || {};
   S.settings.stockFor[kind] = stockKey;
-  consume((kind === "card" ? "shelf" : kind) + "-label", 1);
-  consume("ribbon", 1);
+  consume((kind === "card" ? "shelf" : kind) + "-label", n);
+  consume("ribbon", n);
   save(); renderAll();
 
   const old = document.getElementById("printarea"); if(old) old.remove();
@@ -4218,7 +4292,11 @@ function printProductLabel(id, kind, stockKey){
   document.head.appendChild(style);
   const d = document.createElement("div");
   d.id = "printarea";
-  d.innerHTML = productLabelHTML(i, kind, stockKey);
+  const one = productLabelHTML(i, kind, stockKey, lotPick);
+  let out = "";
+  for(let k = 0; k < n; k++)
+    out += '<div style="break-after:page;page-break-after:always">'+one+'</div>';
+  d.innerHTML = out;
   document.body.appendChild(d);
   setTimeout(() => window.print(), 60);
   const cleanup = () => { d.remove(); style.remove(); window.removeEventListener("afterprint", cleanup); };
@@ -4302,6 +4380,9 @@ function openLot(id){
     '<div class="sheetact"><button class="btn" onclick="traceSheet(\''+id+'\')">Trace</button>'+
     '<button class="btn" onclick="scrapSheet(\''+id+'\')">Write off</button>'+
     '<button class="btn pri" onclick="saveLot(\''+id+'\')">Save</button></div>'+
+    (l.itemId ? '<button class="btn pri full" style="margin-bottom:8px" onclick="printProductLabel(\''+l.itemId+'\',\'vial\',\''+((S.settings.stockFor&&S.settings.stockFor.vial)||DEFAULT_STOCK.vial)+'\','+ (num(l.remaining)||num(l.vials)||10) +',\''+id+'\')">Print '+(num(l.remaining)||num(l.vials)||10)+' labels for this lot</button>'+
+      '<button class="btn full" style="margin-bottom:8px" onclick="exportLabelJPG(\''+l.itemId+'\',\'vial\',\''+((S.settings.stockFor&&S.settings.stockFor.vial)||DEFAULT_STOCK.vial)+'\',\''+id+'\')">Save JPG for NIIMBOT \u00b7 set copies there</button>'+
+      '<button class="btn full" style="margin-bottom:8px" onclick="labelJpg(\''+l.itemId+'\',\'vial\',\''+((S.settings.stockFor&&S.settings.stockFor.vial)||DEFAULT_STOCK.vial)+'\',\''+id+'\')">Save label as JPG for NIIMBOT</button>' : '')+
     dangerZone("Delete lot", () => askDeleteLot(id)));
   wireLotCalc();
 }
