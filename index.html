@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-0320-7204ad";
+const BUILD = "20260804-0328-253beb";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1631,6 +1631,19 @@ function poLanded(po){ return poVendorTotal(po) + num(po.fees) + num(po.customs)
 function poMessage(po){
   const s = S.suppliers.find(x => x.id === po.supplierId);
   const cats = Array.isArray(s && s.prices) ? s.prices : [];
+  // A vendor with an order block wants their own structure:
+  //   List of items: HGH 36iu x3
+  //   Name / address / phone / payment (the stored block)
+  if(s && s.orderBlock){
+    const items = po.lines.map(l => {
+      const it = S.items.find(x => x.id === l.itemId);
+      const rec = cats.find(p => p.itemId === l.itemId);
+      const nm = rec && rec.name ? rec.name
+        : it ? (it.name + (it.dose && !nameHasDose(it.name, it.dose, doseUnit(it)) ? " " + it.dose + doseUnit(it).toLowerCase() : "")) : "item";
+      return nm + " x" + num(l.kits);
+    }).join(", ");
+    return "List of items: " + items + "\n" + s.orderBlock;
+  }
   const out = [];
   po.lines.forEach(l => {
     const it = S.items.find(x => x.id === l.itemId);
@@ -1654,11 +1667,14 @@ function poOrderSheet(id){
     '<p class="hint" style="margin-top:-6px">'+(s && s.wa ? 'To '+esc(s.name)+' · <span class="num">'+esc(s.wa)+'</span>'
       : 'No number saved — WhatsApp will ask you to pick the contact.')+'</p>'+
     '<div class="field"><label>Message — edit before sending</label><textarea id="po_msg" rows="9" style="font-family:var(--mono);font-size:13px">'+esc(txt)+'</textarea></div>'+
-    '<a class="btn pri full" id="po_go" href="#" target="_blank" rel="noopener" style="margin-bottom:8px">Open in WhatsApp</a>'+
+    '<a class="btn pri full" id="po_go" href="#" target="_blank" rel="noopener" style="margin-bottom:8px">Open in '+chanName(s)+'</a>'+
     '<div class="sheetact"><button class="btn" onclick="openPO(\''+id+'\')">Back</button>'+
     '<button class="btn" onclick="copyText(document.getElementById(\'po_msg\').value,this)">Copy</button></div>');
   const ta = $("po_msg"), go = $("po_go");
-  const upd = () => { go.href = waLink(s ? s.wa : "", ta.value); };
+  const upd = () => { go.href = sendLink(s, ta.value); };
+  if(chanOf(s) === "tg") go.addEventListener("click", () => {
+    try{ navigator.clipboard.writeText(ta.value); toast("Message copied \u2014 paste it in the chat"); }catch(e){}
+  });
   ta.addEventListener("input", upd); upd();
 }
 function poStepIx(po){ return Math.max(0, PO_STEPS.indexOf(po.status || "ordered")); }
@@ -3190,6 +3206,17 @@ function code128svg(text){
 /* ============ whatsapp ============ */
 // wa.me opens WhatsApp with the message pre-filled. You still tap send —
 // no app can send on your behalf without the paid WhatsApp Business API.
+function chanOf(s){ return (s && s.channel) === "tg" ? "tg" : "wa"; }
+function chanName(s){ return chanOf(s) === "tg" ? "Telegram" : "WhatsApp"; }
+function sendLink(s, text){
+  if(chanOf(s) === "tg"){
+    // Telegram links cannot prefill a message to a person — the send button
+    // copies the text first and opens the chat; you paste and hit send.
+    const h = String((s && s.wa) || "").replace(/^@/, "").trim();
+    return h ? "https://t.me/" + h : "https://t.me/";
+  }
+  return waLink(s ? s.wa : "", text);
+}
 function waLink(number, text){
   const n = String(number||"").replace(/\D/g,"");
   return "https://wa.me/" + n + "?text=" + encodeURIComponent(text);
@@ -3213,12 +3240,17 @@ function messageSheet(supId, list){
                      : 'No number saved, so WhatsApp will ask you to pick the contact.')+
     '</p>'+
     '<div class="field"><label>Message — edit before sending</label><textarea id="wa_txt" rows="8">'+esc(txt)+'</textarea></div>'+
-    '<a class="btn pri full" id="wa_go" href="#" target="_blank" rel="noopener" style="margin-bottom:8px">Open in WhatsApp</a>'+
+    '<a class="btn pri full" id="wa_go" href="#" target="_blank" rel="noopener" style="margin-bottom:8px">Open in '+chanName(sup)+'</a>'+
     '<div class="sheetact"><button class="btn" onclick="closeSheet()">Close</button>'+
     '<button class="btn" onclick="copyText(document.getElementById(\'wa_txt\').value,this)">Copy text</button></div>'+
-    '<p class="hint" style="margin-top:10px">WhatsApp opens with this typed out. You review it and hit send.</p>');
+    '<p class="hint" style="margin-top:10px">'+(chanOf(sup)==="tg"
+      ? 'Telegram can\u2019t prefill \u2014 the button copies the message and opens the chat; paste and send.'
+      : 'WhatsApp opens with this typed out. You review it and hit send.')+'</p>');
   const ta = $("wa_txt"), go = $("wa_go");
-  const upd = () => { go.href = waLink(sup ? sup.wa : "", ta.value); };
+  const upd = () => { go.href = sendLink(sup, ta.value); };
+  if(chanOf(sup) === "tg") go.addEventListener("click", () => {
+    try{ navigator.clipboard.writeText(ta.value); toast("Message copied \u2014 paste it in the chat"); }catch(e){}
+  });
   ta.addEventListener("input", upd); upd();
 }
 function lowBySupplier(){
@@ -3444,7 +3476,7 @@ function renderSuppliers(){
           esc(s.wa || "no number saved")+' · '+
           (priced ? priced+' priced' : '<span style="color:var(--alert)">no price list</span>')+
           (n ? ' · '+n+' added' : '')+'</small></span>'+
-          '<span class="rt"><span class="pill '+(s.wa?'ok':'')+'">WhatsApp</span></span></button>';
+          '<span class="rt"><span class="pill '+(s.wa?'ok':'')+'">'+chanName(s)+'</span></span></button>';
       }).join("")
     : '<div class="empty" style="padding:16px"><b>No suppliers yet</b>Save a WhatsApp number once and every reorder message writes itself.</div>')
     + '<div class="field" style="margin-top:12px"><label>Sign restock messages as</label>'+
@@ -3462,7 +3494,12 @@ function renderSuppliers(){
 function supplierFields(s){
   s = s || {};
   return '<div class="field"><label>Name</label><input id="s_name" value="'+esc(s.name||"")+'" placeholder="e.g. Kai — Shenzhen"></div>'+
-    '<div class="field"><label>WhatsApp number</label><input id="s_wa" type="tel" inputmode="tel" value="'+esc(s.wa||"")+'" placeholder="+1 555 123 4567"></div>'+
+    '<div class="grid2"><div class="field"><label>Channel</label><select id="s_channel">'+
+      '<option value="wa"'+(chanOf(s)==="wa"?' selected':'')+'>WhatsApp</option>'+
+      '<option value="tg"'+(chanOf(s)==="tg"?' selected':'')+'>Telegram</option></select></div>'+
+    '<div class="field"><label>Number or @username</label><input id="s_wa" value="'+esc(s.wa||"")+'" placeholder="+1 555\u2026 or @vendor"></div></div>'+
+    '<div class="field"><label>Order details block \u2014 pasted under every order (name, address, payment)</label>'+
+    '<textarea id="s_block" rows="4" placeholder="Name: \u2026\nShipping address: \u2026\nPhone number: \u2026\nPreferred payment: \u2026">'+esc(s.orderBlock||"")+'</textarea></div>'+
     '<p class="hint" style="margin-top:-4px">Include the country code. Spaces and dashes are fine — they get stripped.</p>'+
 
     '<div class="field"><label>Note</label><input id="s_note" value="'+esc(s.note||"")+'" placeholder="Lead time, MOQ, anything"></div>';
@@ -3476,7 +3513,7 @@ function newSupplierSheet(){
 function saveNewSupplier(){
   const name = $("s_name").value.trim();
   if(!name){ toast("Give them a name"); return; }
-  S.suppliers.push({id:uid("s"), name, wa:$("s_wa").value.trim(), note:$("s_note").value.trim(),
+  S.suppliers.push({id:uid("s"), name, wa:$("s_wa").value.trim(), channel:($("s_channel")&&$("s_channel").value)||"wa", orderBlock:($("s_block")&&$("s_block").value.trim())||"", note:$("s_note").value.trim(),
                     shipTiers:[], shipOptions:[], discTiers:[]});
   save(); closeSheet(); renderAll(); toast(name + " added");
 }
@@ -3501,6 +3538,8 @@ function saveSupplier(id){
   const s = S.suppliers.find(x => x.id === id); if(!s) return;
   s.name = $("s_name").value.trim() || s.name;
   s.wa = $("s_wa").value.trim();
+  if($("s_channel")) s.channel = $("s_channel").value;
+  if($("s_block")) s.orderBlock = $("s_block").value.trim();
   s.note = $("s_note").value.trim();
   save(); closeSheet(); renderAll(); toast("Saved");
 }
