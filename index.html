@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-0156-5185ee";
+const BUILD = "20260804-0225-b2b6d4";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -5315,6 +5315,9 @@ function openQuote(id){
     '<div class="field" style="margin-top:10px"><label>Add a product</label>'+
       '<input id="q_find" value="'+esc(quoteFilter)+'" placeholder="type to search" oninput="quoteFilter=this.value;renderQuoteFind()"></div>'+
     '<div id="q_found" style="max-height:26vh;overflow:auto"></div>'+
+    '<div class="grid2"><div class="field"><label>Cost multiplier</label><input id="q_mult" type="number" step="any" inputmode="decimal" value="'+quoteMult(q)+'"></div>'+
+    '<div class="field"><label>&#8203;</label><button class="btn full" onclick="applyQuoteMult()">Price all at cost \u00d7</button></div></div>'+
+    '<p class="hint" style="margin-top:-6px">Stocked lines use true landed cost \u2014 goods, freight, and Coinbase fees are already inside the per-vial number, so the multiplier recovers them automatically. Estimated lines (no stock) are bare vendor prices; treat those margins as ceilings.</p>'+
     '<div class="grid2" style="margin-top:10px"><div class="field"><label>Shipping charged</label><input id="q_ship" type="number" step="any" value="'+num(q.shipCharged)+'"></div>'+
     '<div class="field"><label>Valid for (days)</label><input id="q_valid" type="number" value="'+(num(q.validDays)||7)+'"></div></div>'+
     '<div class="rcells" style="border:1px solid var(--line);border-radius:4px;margin-bottom:10px">'+
@@ -5361,8 +5364,10 @@ function addQLine(itemId){
   if(hit) hit.qty = num(hit.qty) + 1;
   else {
     // No memorising price lists: an unpriced product quotes itself at
-    // cost × your markup until you set (or lock) a real retail price.
-    const p0 = num(it && it.price) || +(suggestedPrice(it)||0).toFixed(2);
+    // cost × this quote's multiplier until a real retail price exists.
+    const cc = quoteCost(itemId);
+    const p0 = num(it && it.price) ||
+      (num(cc.per) > 0 ? Math.round(cc.per * quoteMult(q) * 100) / 100 : 0);
     q.lines.push({itemId, qty:1, price:p0});
   }
   quoteFilter = "";
@@ -5410,6 +5415,23 @@ function readQuote(q){
   if($("q_cust")) q.customerId = $("q_cust").value;
   if($("q_ship")) q.shipCharged = num($("q_ship").value);
   if($("q_valid")) q.validDays = num($("q_valid").value) || 7;
+  if($("q_mult")) q.mult = num($("q_mult").value);
+}
+function quoteMult(q){
+  return num(q && q.mult) || num(S.settings.markup) || 2.75;
+}
+function applyQuoteMult(){
+  const q = S.quotes.find(x => x.id === curQuote); if(!q) return;
+  readQuote(q);
+  const m = quoteMult(q);
+  let priced = 0;
+  (q.lines||[]).forEach(l => {
+    const cc = quoteCost(l.itemId, l.srcSup);
+    if(num(cc.per) > 0){ l.price = Math.round(cc.per * m * 100) / 100; priced++; }
+  });
+  save();
+  toast(priced + " line" + (priced===1?"":"s") + " priced at cost \u00d7 " + m);
+  openQuote(q.id);
 }
 function saveQuote(){
   const q = S.quotes.find(x => x.id === curQuote); if(!q) return;
@@ -5468,13 +5490,25 @@ function quoteMessage(){
 function quoteToOrder(){
   const q = S.quotes.find(x => x.id === curQuote); if(!q) return;
   if(!(q.lines||[]).length){ toast("Add some lines first"); return; }
-  const o = {id:uid("o"), ref: q.ref || ("Order " + (S.orders.length+1)), created:Date.now(),
+  const o = {id:uid("o"), ref: nextRef(S.orders, "#"), created:Date.now(),
              status:"open", lines:[], shipCharged:num(q.shipCharged), shipCost:0,
-             carrier:"", tracking:"", customerId:q.customerId, fromQuote:q.id};
+             carrier:"", tracking:"", customerId:q.customerId, fromQuote:q.id, quoteRef:q.ref};
+  // The quote already picked the products — carry every line straight in,
+  // committing stock at the quoted prices. Nobody picks twice.
+  const short = [];
+  (q.lines||[]).forEach(l => {
+    const it = S.items.find(i => i.id === l.itemId); if(!it) return;
+    const qty = num(l.qty), price = num(l.price);
+    if(qty <= 0) return;
+    if(!moveOut(it, qty, o.id, 1, price)){ short.push(it.name+" ("+num(it.qty)+" on hand)"); return; }
+    o.lines.push({itemId: it.id, qty, price, pack:1});
+  });
   S.orders.push(o);
   S.activeOrder = o.id;
-  save(); closeSheet(); switchTab("scan"); renderAll();
-  toast("Picking " + o.ref + " — scan the vials to commit stock");
+  save(); closeSheet(); renderAll();
+  if(short.length) toast("Order "+o.ref+" from "+ (q.ref||"quote") +" \u2014 short on: "+short.join(", "));
+  else toast(o.ref+" created from "+(q.ref||"the quote")+" \u2014 stock committed");
+  openOrder(o.id);
 }
 function renderQuotes(){
   const el = $("quoteList"); if(!el) return;
