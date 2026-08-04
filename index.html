@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-0252-663012";
+const BUILD = "20260804-0320-7204ad";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -577,6 +577,7 @@ function friendsKitPrice(i){
   const c = costBasis(i);
   return c > 0 ? c * friendsX() : kitPrice(i);
 }
+function doseUnit(i){ return (i && i.unit) === "iu" ? "IU" : (i && i.unit) === "mcg" ? "mcg" : "mg"; }
 function priceFor(i, tier, packQty){
   if(!i) return 0;
   if(num(packQty) < 10) return num(i.price);                     // singles: list, either tier
@@ -3005,7 +3006,7 @@ function showItem(item, delta){
   const c = unitCost(item.id), p = num(item.price);
   const pk = (lastPack && lastPack.item.id === item.id) ? lastPack : null;
   $("rName").textContent = item.name;
-  $("rDose").innerHTML = (item.dose ? esc(item.dose) + " mg" : "") +
+  $("rDose").innerHTML = (item.dose ? esc(item.dose) + " " + doseUnit(item) : "") +
     (pk && pk.qty > 1 ? ' <span class="pill brand">KIT ×'+pk.qty+'</span>' : "");
   $("rQty").textContent = String(num(item.qty)).padStart(3,"0");
   $("rCost").textContent = money(c);
@@ -3302,7 +3303,7 @@ function renderLow(){
   $("lowSect").innerHTML = '<div class="eyebrow"><span style="color:var(--alert)">Reorder now · '+low.length+'</span></div>' + groups +
     low.map(i => {
       const isSupply = !!i.kind;
-      const sub = isSupply ? esc(SUPPLY_KINDS[i.kind]||"Supply") : (i.dose?esc(i.dose)+' mg · ':'') + 'reorder at ' + num(i.reorder);
+      const sub = isSupply ? esc(SUPPLY_KINDS[i.kind]||"Supply") : (i.dose?esc(i.dose)+' '+doseUnit(i)+' · ':'') + 'reorder at ' + num(i.reorder);
       return '<div class="row low"><button class="nm" style="text-align:left;padding:0;background:none;border:none" onclick="'+
         (isSupply?'openSupply':'openItem')+'(\''+i.id+'\')">'+
         '<b>'+esc(i.name)+'</b><small>'+sub+'</small></button>'+
@@ -3426,7 +3427,7 @@ function renderStock(){
     sorted.map(i => {
     const c = unitCost(i.id), p = num(i.price), low = num(i.qty) <= num(i.reorder);
     return '<button class="row'+(low?' low':'')+'" id="row_'+i.id+'" onclick="openItem(\''+i.id+'\')"><span class="nm"><b>'+esc(i.name)+'</b><small>'+
-      (i.dose?esc(i.dose)+' mg · ':'')+money(c)+' → '+money(p)+' · '+marginPct(c,p).toFixed(0)+'%</small></span>'+
+      (i.dose?esc(i.dose)+' '+doseUnit(i)+' · ':'')+money(c)+' → '+money(p)+' · '+marginPct(c,p).toFixed(0)+'%</small></span>'+
       '<span class="rt"><b'+(low?' style="color:var(--alert)"':'')+'>'+num(i.qty)+'</b>'+esc(i.bin||i.code||"no bin")+'</span></button>';
   }).join("");
 }
@@ -3652,7 +3653,9 @@ function newItemSheet(code){
   sheet('<h2>New product</h2>'+
     (code ? '<p class="hint" style="margin-top:-6px">Nothing matched <b class="num">'+esc(code)+'</b>. Set it up now.</p>' : '')+
     '<div class="field"><label>Name</label><input id="f_name" placeholder="e.g. BPC-157" autocapitalize="characters"></div>'+
-    '<div class="grid2"><div class="field"><label>Dose per vial (mg)</label><input id="f_dose" type="number" step="any" inputmode="decimal"></div>'+
+    '<div class="grid2"><div class="field"><label>Dose per vial</label><input id="f_dose" type="number" step="any" inputmode="decimal"></div>'+
+    '<div class="field"><label>Unit</label><select id="f_unit"><option value="mg">mg</option><option value="iu">IU</option><option value="mcg">mcg</option></select></div></div>'+
+    '<div class="grid2">'+
     '<div class="field"><label>Scan code</label><input id="f_code" value="'+esc(code||"")+'" autocapitalize="characters"></div></div>'+
     '<div class="grid3"><div class="field"><label>Sells for</label><input id="f_price" type="number" step="any" inputmode="decimal"></div>'+
     '<div class="field"><label>On hand</label><input id="f_qty" type="number" value="0" inputmode="numeric"></div>'+
@@ -3669,7 +3672,7 @@ function saveNewItem(){
   const codeWanted = $("f_code").value.trim().toUpperCase();
   const clash = codeTakenBy(codeWanted, null);
   if(clash){ toast("Code taken by "+clash.name+" \u2014 codes must be unique"); return; }
-  const it = {id:uid("i"), name, dose:$("f_dose").value.trim(), code:codeWanted,
+  const it = {id:uid("i"), name, dose:$("f_dose").value.trim(), unit:($("f_unit")&&$("f_unit").value)||"mg", code:codeWanted,
               price:num($("f_price").value), qty:num($("f_qty").value), reorder:num($("f_re").value),
               supplierId:$("f_sup").value, orderQty:num($("f_oq").value), weight:num($("f_wt").value)};
   S.items.push(it); save(); closeSheet(); renderAll();
@@ -3729,7 +3732,10 @@ function openItem(id){
   const c = unitCost(i.id);
   sheet('<h2>'+esc(i.name)+'</h2>'+
     '<div class="grid2"><div class="field"><label>Name</label><input id="e_name" value="'+esc(i.name)+'"></div>'+
-    '<div class="field"><label>Dose (mg)</label><input id="e_dose" type="number" step="any" value="'+esc(i.dose)+'"></div></div>'+
+    '<div class="field"><label>Dose</label><input id="e_dose" type="number" step="any" value="'+esc(i.dose)+'"></div></div>'+
+    '<div class="field"><label>Unit</label><select id="e_unit">'+
+      ['mg','iu','mcg'].map(u=>'<option value="'+u+'"'+((i.unit||"mg")===u?' selected':'')+'>'+(u==='iu'?'IU':u)+'</option>').join("")+
+    '</select></div>'+
     '<div class="grid3"><div class="field"><label>Sells for</label><input id="e_price" type="number" step="any" value="'+num(i.price)+'"></div>'+
     '<div class="field"><label>On hand</label><input id="e_qty" type="number" value="'+num(i.qty)+'"></div>'+
     '<div class="field"><label>Reorder at</label><input id="e_re" type="number" value="'+num(i.reorder)+'"></div></div>'+
@@ -3822,6 +3828,7 @@ function saveItem(id, quiet){
   const i = S.items.find(x => x.id === id); if(!i) return;
   i.name = $("e_name").value.trim() || i.name;
   i.dose = $("e_dose").value.trim();
+  if($("e_unit")) i.unit = $("e_unit").value;
   i.price = num($("e_price").value);
   i.qty = num($("e_qty").value);
   i.reorder = num($("e_re").value);
@@ -4047,7 +4054,7 @@ function wrapVialHTML(i, st, lotPick){
 
   // A blend goes in the name as "BPC-157 / TB-500" and splits onto two lines.
   const parts = i.name.split(/\s*\/\s*/).filter(Boolean);
-  let nameLines = parts.length > 1 ? parts : [composeName(i.name, i.dose, "mg")];
+  let nameLines = parts.length > 1 ? parts : [composeName(i.name, i.dose, doseUnit(i))];
 
   // Real Helvetica/Arial Bold character widths (Adobe core metrics, /1000 em).
   // Measuring instead of guessing is what stops long names from clipping.
@@ -4164,8 +4171,8 @@ function productLabelHTML(i, kind, stockKey, lotPick){
 
   const title = kind === "kit" ? esc(i.name) + " ×10" : kind === "shelf" ? esc(i.bin || "NO BIN") : esc(i.name);
   const sub = kind === "shelf"
-    ? esc(i.name) + (i.dose ? " · " + esc(i.dose) + " mg" : "")
-    : (i.dose ? esc(i.dose) + " mg" + (kind === "kit" ? " each" : "") : "") + (lot ? " · LOT " + esc(lot.code) : "");
+    ? esc(i.name) + (i.dose ? " · " + esc(i.dose) + " " + doseUnit(i) : "")
+    : (i.dose ? esc(i.dose) + " " + doseUnit(i) + (kind === "kit" ? " each" : "") : "") + (lot ? " · LOT " + esc(lot.code) : "");
   // Shelf labels are for the rack, not the customer — no branding, keep the bin big.
   const brand = kind === "shelf" ? "" : logoTag(st);
   const titleSize = kind === "shelf" ? st.h*0.32 : st.h*(brand ? 0.145 : 0.17);
