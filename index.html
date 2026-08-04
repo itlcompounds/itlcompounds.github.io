@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-0225-b2b6d4";
+const BUILD = "20260804-0241-7e9675";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4702,11 +4702,15 @@ function completeOrder(id){
   }
   delete o._closeArmed;
   o.status = "done";
+  const srcQ = S.quotes.find(x => x.orderId === id || x.id === o.fromQuote);
+  if(srcQ){ srcQ.status = "won"; srcQ.orderId = srcQ.orderId || id; }
   if(S.activeOrder === id) S.activeOrder = null;
   save(); renderAll(); toast("Order closed");
   openOrder(id);
 }
 function reopenOrder(id){
+  const srcQ = S.quotes.find(x => x.orderId === id);
+  if(srcQ && srcQ.status === "won") srcQ.status = "ordered";
   const o = S.orders.find(x => x.id === id); if(!o) return;
   o.status = o.tracking ? "shipped" : "open";
   save(); renderAll(); toast("Reopened");
@@ -5328,7 +5332,10 @@ function openQuote(id){
     (t.profit < 0 ? '<div class="astrip" style="border:1px solid #4A2C29;border-radius:4px;margin-bottom:10px"><span class="t">This quote is below your cost</span></div>' : '')+
     (t.estimated ? '<p class="hint">Some lines use the cheapest vendor price at 2 kits rather than a real landed cost — freight, fees and your discount will move it. Treat the margin as a ceiling.</p>' : '')+
     '<button class="btn pri full" style="margin-bottom:8px" onclick="saveQuote();quoteMessage()">Send quote</button>'+
-    '<button class="btn full" style="margin-bottom:8px;border-color:#28503A;color:var(--ok)" onclick="saveQuote();quoteToOrder()">Turn into an order</button>'+
+    (q.orderId
+      ? '<button class="btn full" style="margin-bottom:8px" onclick="closeSheet();openOrder(\''+q.orderId+'\')">'+
+        (q.status === "won" ? 'Closed ✓ · view the order' : 'Order placed · view it')+'</button>'
+      : '<button class="btn full" style="margin-bottom:8px;border-color:#28503A;color:var(--ok)" onclick="saveQuote();quoteToOrder()">Turn into an order</button>')+
     '<div class="sheetact"><button class="btn" onclick="saveQuote();closeSheet();renderAll()">Close</button>'+
     '<button class="btn pri" onclick="saveQuote();closeSheet();renderAll()">Save</button></div>'+
     dangerZone("Delete quote", () => confirmDelete("Delete this quote?", (q.lines||[]).length+" line(s) and the pricing you worked out.", dropQuote, () => openQuote(q.id))));
@@ -5505,6 +5512,8 @@ function quoteToOrder(){
   });
   S.orders.push(o);
   S.activeOrder = o.id;
+  q.orderId = o.id;
+  q.status = "ordered";
   save(); closeSheet(); renderAll();
   if(short.length) toast("Order "+o.ref+" from "+ (q.ref||"quote") +" \u2014 short on: "+short.join(", "));
   else toast(o.ref+" created from "+(q.ref||"the quote")+" \u2014 stock committed");
@@ -5520,7 +5529,10 @@ function renderQuotes(){
       const dead = num(q.validDays) && age > num(q.validDays);
       return '<button class="row" onclick="openQuote(\''+q.id+'\')"><span class="nm"><b>'+
         esc(q.ref || "Quote")+'</b><small>'+esc(c?c.name:"no customer")+' · '+(q.lines||[]).length+
-        ' line'+((q.lines||[]).length===1?'':'s')+' · '+(dead?'<span style="color:var(--alert)">expired</span>':'day '+age)+'</small></span>'+
+        ' line'+((q.lines||[]).length===1?'':'s')+' · '+
+        (q.status === "won" ? '<span style="color:var(--ok)">closed ✓</span>'
+         : q.status === "ordered" ? '<span style="color:var(--brand)">→ order placed</span>'
+         : dead ? '<span style="color:var(--alert)">expired</span>' : 'day '+age)+'</small></span>'+
         '<span class="rt"><b>'+money(t.rev)+'</b>'+t.margin.toFixed(0)+'% margin</span></button>';
     }).join("");
 }
