@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-0028-81542c";
+const BUILD = "20260804-0105-16d382";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1724,6 +1724,7 @@ function renderPOs(){
   }).join("") + histLink;
 }
 function newPOSheet(){
+  poDraft = { qty:{}, price:{} };
   if(!S.suppliers.length){ toast("Add a supplier first"); switchTab("stock"); return; }
   if(!S.items.length){ toast("Add a product first"); switchTab("stock"); return; }
   newPODisc = 1;
@@ -1759,12 +1760,13 @@ function poWarnHTML(total){
 }
 function poLiveTotal(){
   let goods = 0, kits = 0, products = 0;
-  const priceOf = {};
-  document.querySelectorAll(".po_p").forEach(el => { priceOf[el.dataset.item] = num(el.value); });
-  document.querySelectorAll(".po_k").forEach(el => {
-    goods += num(el.value) * num(priceOf[el.dataset.item]);
-    kits += num(el.value);
-    if(num(el.value) > 0) products++;
+  Object.keys(poDraft.qty).forEach(id => {
+    const k = num(poDraft.qty[id]);
+    if(k > 0){
+      goods += k * num(poDraft.price[id]);
+      kits += k;
+      products++;
+    }
   });
   const sup = S.suppliers.find(x => x.id === ($("po_sup") ? $("po_sup").value : ""));
   const optIx = num($("po_opt") ? $("po_opt").value : 0);
@@ -1783,6 +1785,7 @@ function poLiveTotal(){
   const n = $("po_disc_note");
   if(n && newPODisc === 1 && auto < 1) n.textContent = "Volume discount of "+Math.round((1-auto)*100)+"% applies at this size.";
 }
+let poDraft = { qty:{}, price:{} };
 function poLinesRefresh(filter){
   const sup = $("po_sup").value;
   const so = $("po_opt"), sObj = S.suppliers.find(x => x.id === sup);
@@ -1790,20 +1793,23 @@ function poLinesRefresh(filter){
     '<option value="'+i+'">'+esc(o.name||("Option "+(i+1)))+(num(o.add)?' (+'+money(num(o.add))+')':'')+'</option>').join("");
   const lead = avgLead(sup);
   const q = (filter||"").toLowerCase().trim();
-  // Typed values survive re-renders; captured first so the sort can use them.
-  const prev = {}, prevP = {};
-  document.querySelectorAll(".po_k").forEach(el=>{ if(num(el.value)>0) prev[el.dataset.item]=el.value; });
-  document.querySelectorAll(".po_p").forEach(el=>{ if(el.value !== "") prevP[el.dataset.item]=el.value; });
-  // Picked rows float to the top on every re-render (search, vendor change),
-  // so clearing the search shows the whole order first for confirmation.
-  const sorted = S.items.slice().sort((a,b)=>
-    ((prev[b.id]?1:0)-(prev[a.id]?1:0)) || (a.name||"").localeCompare(b.name||""));
-  const visible = q ? sorted.filter(i=>(i.name||"").toLowerCase().includes(q)||(i.code||"").toLowerCase().includes(q)) : sorted;
+  // The draft, not the DOM, owns typed values: searching can hide rows
+  // without losing them, and picked items stay pinned on top throughout.
+  const prev = poDraft.qty, prevP = poDraft.price;
+  const az = (a,b) => (a.name||"").localeCompare(b.name||"");
+  const picked = S.items.filter(i => num(prev[i.id]) > 0).sort(az);
+  const rest = S.items.filter(i => !(num(prev[i.id]) > 0) &&
+      (!q || (i.name||"").toLowerCase().includes(q) || (i.code||"").toLowerCase().includes(q)))
+    .sort(az);
+  const visible = picked.concat(rest);
   $("po_lines").innerHTML = visible.map(i => {
     const e = vendorEntryFor(sup, i.id);
     const p = e ? num(e.kitPrice) : null;
     const short = num(i.qty) <= num(i.reorder);
     const v = prev[i.id]||"0";
+    // Prefilled prices never fire input events, so the draft must learn them
+    // here — otherwise a picked row hidden by search saves with price $0.
+    if(prevP[i.id] == null && p != null && p > 0) poDraft.price[i.id] = String(p);
     const anyCat = e && e.cat ? e.cat
       : (() => { const o = bestOtherVendor(i.id, sup);
                  const oe = o && o.sup.prices.find(x => x.itemId === i.id);
@@ -1824,20 +1830,22 @@ function poLinesRefresh(filter){
       'type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"></span></span></div>';
   }).join("") + (lead ? '<p class="hint">Past orders from this vendor landed in about '+lead+' days.</p>' : '');
   document.querySelectorAll(".po_k").forEach(el => el.addEventListener("input", function(){
+    poDraft.qty[this.dataset.item] = this.value;
     poLiveTotal();
     const row = document.getElementById("por_"+this.dataset.item);
     if(row) row.classList.toggle("po_row_active", num(this.value) > 0);
   }));
-  document.querySelectorAll(".po_p").forEach(el => el.addEventListener("input", poLiveTotal));
+  document.querySelectorAll(".po_p").forEach(el => el.addEventListener("input", function(){
+    poDraft.price[this.dataset.item] = this.value;
+    poLiveTotal();
+  }));
   poLiveTotal();
 }
 function saveNewPO(){
   const lines = [];
-  const priceOf = {};
-  document.querySelectorAll(".po_p").forEach(el => { priceOf[el.dataset.item] = num(el.value); });
-  document.querySelectorAll(".po_k").forEach(el => {
-    const k = num(el.value);
-    if(k > 0) lines.push({itemId:el.dataset.item, kits:k, kitPrice:num(priceOf[el.dataset.item])});
+  Object.keys(poDraft.qty).forEach(id => {
+    const k = num(poDraft.qty[id]);
+    if(k > 0) lines.push({itemId:id, kits:k, kitPrice:num(poDraft.price[id])});
   });
   if(lines.some(l => l.kitPrice <= 0)){
     toast("A selected product has no $/kit \u2014 type its price"); return;
@@ -2673,12 +2681,14 @@ function priceSheet(supId){
       (it ? esc(it.name) : '<span style="color:var(--alert)">unmatched</span>')+'</small></span>'+
       '<span class="rt"><b>'+money(num(p.kitPrice))+'</b>per kit</span></button>';
   }).join("") : '<div class="empty" style="padding:16px"><b>No prices yet</b>Load the PDF they sent, or paste the text.</div>';
+  const addBtn = '<button class="btn full" style="margin:8px 0" onclick="editPrice(\''+supId+'\',-1)">Add one product</button>';
 
   const resumable = review.supId === supId && (review.rows||[]).length;
   sheet('<h2>'+esc(s.name)+' — prices</h2>'+
     (resumable ? '<button class="btn pri full" style="margin-bottom:10px" onclick="reviewSheet()">'+
       'Resume review · '+review.rows.length+' rows'+(reviewEdits()?', '+reviewEdits()+' edited':'')+'</button>' : '')+
     rows+
+    addBtn+
     filePicker("pl_pdf", "Choose price list file", "Price list — PDF, Excel or CSV")+
     '<div class="field"><label>…or paste the text</label><textarea id="pl_txt" rows="4" placeholder="BPC-157 10mg  $85"></textarea></div>'+
     '<p class="hint">Everything goes through a review screen before it saves. Prices are per 10-vial kit. A spreadsheet reads more reliably than a PDF — the rows are already rows, so nothing has to be inferred from layout.</p>'+
@@ -2728,21 +2738,33 @@ function importPasted(supId){
 // Everything the parser guessed at stays correctable after the fact.
 function editPrice(supId, ix){
   const sup = S.suppliers.find(x => x.id === supId); if(!sup) return;
-  const p = (sup.prices||[])[ix]; if(!p) return;
+  const adding = ix < 0;
+  const p = adding ? {name:"", cat:"", kitPrice:"", itemId:""} : (sup.prices||[])[ix];
+  if(!p) return;
   const opts = '<option value="">— none —</option>' +
     itemsAZ().map(i => '<option value="'+i.id+'"'+(p.itemId===i.id?' selected':'')+'>'+esc(i.name)+'</option>').join("");
-  sheet('<h2>Edit price</h2>'+
+  sheet('<h2>'+(adding ? 'Add to price list' : 'Edit price')+'</h2>'+
     '<div class="field"><label>Name on their list</label><input id="ep_name" value="'+esc(p.name||"")+'"></div>'+
     '<div class="grid2"><div class="field"><label>Catalogue no. — used in the order message</label><input id="ep_cat" value="'+esc(p.cat||"")+'" placeholder="e.g. T10"></div>'+
     '<div class="field"><label>Price per kit</label><input id="ep_price" type="number" step="any" value="'+num(p.kitPrice)+'"></div></div>'+
     '<div class="field"><label>Matched product</label><select id="ep_item">'+opts+'</select></div>'+
     '<p class="hint">The catalogue number is what goes in the WhatsApp order, so it is worth getting right. Renaming here does not rename the product — do that in Stock.</p>'+
-    '<div class="sheetact"><button class="btn warn" onclick="dropPrice(\''+supId+'\','+ix+')">Delete</button>'+
+    '<div class="sheetact">'+(adding ? '<button class="btn" onclick="priceSheet(\''+supId+'\')">Cancel</button>'
+      : '<button class="btn warn" onclick="dropPrice(\''+supId+'\','+ix+')">Delete</button>')+
     '<button class="btn pri" onclick="savePriceRow(\''+supId+'\','+ix+')">Save</button></div>');
 }
 function savePriceRow(supId, ix){
   const sup = S.suppliers.find(x => x.id === supId); if(!sup) return;
-  const p = (sup.prices||[])[ix]; if(!p) return;
+  sup.prices = sup.prices || [];
+  if(ix < 0){
+    const name = $("ep_name").value.trim();
+    if(!name){ toast("Give it the name on their list"); return; }
+    sup.prices.push({name, cat:$("ep_cat").value.trim(),
+      kitPrice:num($("ep_price").value), itemId:$("ep_item").value, perKit:10});
+    save(); priceSheet(supId); toast("Added to "+sup.name+"'s list");
+    return;
+  }
+  const p = sup.prices[ix]; if(!p) return;
   p.name = $("ep_name").value.trim() || p.name;
   p.cat = $("ep_cat").value.trim();
   p.kitPrice = num($("ep_price").value);
