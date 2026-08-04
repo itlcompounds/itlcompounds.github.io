@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260803-2214-c2b453";
+const BUILD = "20260804-0028-81542c";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1790,11 +1790,15 @@ function poLinesRefresh(filter){
     '<option value="'+i+'">'+esc(o.name||("Option "+(i+1)))+(num(o.add)?' (+'+money(num(o.add))+')':'')+'</option>').join("");
   const lead = avgLead(sup);
   const q = (filter||"").toLowerCase().trim();
-  const sorted = S.items.slice().sort((a,b)=>(a.name||"").localeCompare(b.name||""));
-  const visible = q ? sorted.filter(i=>(i.name||"").toLowerCase().includes(q)||(i.code||"").toLowerCase().includes(q)) : sorted;
+  // Typed values survive re-renders; captured first so the sort can use them.
   const prev = {}, prevP = {};
   document.querySelectorAll(".po_k").forEach(el=>{ if(num(el.value)>0) prev[el.dataset.item]=el.value; });
   document.querySelectorAll(".po_p").forEach(el=>{ if(el.value !== "") prevP[el.dataset.item]=el.value; });
+  // Picked rows float to the top on every re-render (search, vendor change),
+  // so clearing the search shows the whole order first for confirmation.
+  const sorted = S.items.slice().sort((a,b)=>
+    ((prev[b.id]?1:0)-(prev[a.id]?1:0)) || (a.name||"").localeCompare(b.name||""));
+  const visible = q ? sorted.filter(i=>(i.name||"").toLowerCase().includes(q)||(i.code||"").toLowerCase().includes(q)) : sorted;
   $("po_lines").innerHTML = visible.map(i => {
     const e = vendorEntryFor(sup, i.id);
     const p = e ? num(e.kitPrice) : null;
@@ -3615,9 +3619,11 @@ function closeSheet(){ $("sheet").classList.remove("on"); $("sheetPanel").innerH
 let sheetLocked = false;   // set while a sheet holds unsaved work
 on("sheet", "click", e => {
   if(e.target.id !== "sheet") return;
-  if(camStream){ stopCam(); return; }
-  if(sheetLocked){ toast("Use Cancel or Import — tap outside won't discard this"); return; }
-  closeSheet();
+  // Tapping outside still stops a running camera scan — but it no longer
+  // closes the sheet. With a mouse, backdrop-close was a data-shredder:
+  // one stray click and a half-typed purchase was gone. Sheets close only
+  // through their own buttons now.
+  if(camStream) stopCam();
 });
 
 function newItemSheet(code){
