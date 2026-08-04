@@ -271,7 +271,7 @@ input[type=file]{padding:8px;font-size:13px}
 <!-- ================= STOCK ================= -->
 <section class="view" id="v-stock">
   <div class="sect" style="margin-top:4px">
-    <div class="eyebrow"><span>Products</span><span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="pill" id="demandBtn">Demand</button><button class="pill" id="reorderBtn">Reorder</button><button class="pill" id="repriceBtn">Reprice</button><button class="pill" id="tidyBtn">Tidy</button><button class="pill brand" id="addItemBtn">+ New product</button></span></div>
+    <div class="eyebrow"><span>Products</span><span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="pill" id="demandBtn">Demand</button><button class="pill" id="reorderBtn">Reorder</button><button class="pill" id="repriceBtn">Reprice</button><button class="pill" id="priceListBtn">Price list</button><button class="pill" id="tidyBtn">Tidy</button><button class="pill brand" id="addItemBtn">+ New product</button></span></div>
     <input id="stockSearchBox" type="search" placeholder="Search products…" oninput="stockSearch(this.value)" style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px">
     <div id="stockList"></div>
   </div>
@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-0328-253beb";
+const BUILD = "20260804-0553-da3268";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -517,6 +517,39 @@ function applySuggested(id){
   saveItem(id, 1);
   i.price = +p.toFixed(2);
   save(); openItem(id); toast("Priced at " + money(i.price));
+}
+function priceListText(mult, incStock, incSoon){
+  const m = num(mult) || num(S.settings.markup) || 2.75;
+  const line = i => {
+    const per = Math.ceil(costBasis(i) * m);            // whole dollars read like a menu
+    const nm = esc(i.name) + (i.dose && !nameHasDose(i.name, i.dose, doseUnit(i)) ? " " + i.dose + doseUnit(i).toLowerCase() : "");
+    return nm + " \u2014 $" + per + "/vial \u00b7 $" + (per*10) + "/kit";
+  };
+  const sellable = S.items.filter(i => !i.kind && costBasis(i) > 0)
+    .sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  const stock = sellable.filter(i => num(i.qty) > 0);
+  const soon  = sellable.filter(i => num(i.qty) <= 0);
+  const parts = [];
+  if(incStock && stock.length) parts.push("IN STOCK \u2014 ready to ship\n" + stock.map(line).join("\n"));
+  if(incSoon && soon.length)  parts.push("BY ORDER / COMING SOON\n" + soon.map(line).join("\n"));
+  return parts.join("\n\n");
+}
+function priceListSheet(){
+  const m0 = num(S.settings.markup) || 2.75;
+  sheet('<h2>Price list</h2>'+
+    '<p class="hint" style="margin-top:-6px">Sell prices at cost \u00d7 your multiplier \u2014 landed cost (fees and freight included) for stocked items, vendor price for by-order items. Edit the text before you send it.</p>'+
+    '<div class="grid2"><div class="field"><label>Multiplier</label><input id="pl_mult" type="number" step="any" inputmode="decimal" value="'+m0+'"></div>'+
+    '<div class="field"><label>Include</label><div style="display:flex;gap:10px;padding-top:8px">'+
+      '<label style="font-size:13px"><input type="checkbox" id="pl_stock" checked> In stock</label>'+
+      '<label style="font-size:13px"><input type="checkbox" id="pl_soon" checked> Coming soon</label></div></div></div>'+
+    '<div class="field"><label>The list \u2014 edit freely</label><textarea id="pl_txt" rows="14" style="font-family:var(--mono);font-size:13px"></textarea></div>'+
+    '<div class="sheetact"><button class="btn" onclick="closeSheet()">Close</button>'+
+    '<button class="btn pri" onclick="copyText(document.getElementById(\'pl_txt\').value,this)">Copy</button></div>');
+  const regen = () => {
+    $("pl_txt").value = priceListText($("pl_mult").value, $("pl_stock").checked, $("pl_soon").checked);
+  };
+  ["pl_mult","pl_stock","pl_soon"].forEach(id => $(id).addEventListener("input", regen));
+  regen();
 }
 function repriceAllSheet(){
   const locked = S.items.filter(i => i.priceLock && costBasis(i) > 0).length;
@@ -4623,13 +4656,17 @@ function openOrder(id){
     '<div class="field"><label>Postage cost</label><input id="o_scost2" type="number" step="any" value="'+num(o.shipCost)+'"></div></div>'+
     '<div class="field"><label>Status</label><select id="o_status">'+
     ["open","packed","shipped"].map(s => '<option'+(o.status===s?' selected':'')+'>'+s+'</option>').join("")+'</select></div>'+
-    (o.paidAt
+    (o.noCharge
+      ? ''
+      : o.paidAt
       ? '<button class="btn full" style="margin-bottom:8px;border-color:#28503A;color:var(--ok)" onclick="togglePaid(\''+o.id+'\')">PAID \u2713 '+toDateInput(o.paidAt)+' \u00b7 tap to undo</button>'
       : '<button class="btn full" style="margin-bottom:8px" onclick="paymentSheet(\''+o.id+'\')">Request payment \u00b7 '+money(t.rev)+'</button>'+
         '<button class="btn full" style="margin-bottom:8px" onclick="togglePaid(\''+o.id+'\')">Mark paid \u00b7 '+money(t.rev)+'</button>')+
     (o.status === "done"
       ? '<button class="btn full" style="margin-bottom:8px" onclick="reopenOrder(\''+o.id+'\')">Completed \u2713 \u00b7 tap to reopen</button>'
       : '<button class="btn full" style="margin-bottom:8px" onclick="completeOrder(\''+o.id+'\')">Complete &amp; close</button>')+
+    '<button class="btn full" style="margin-bottom:8px'+(o.noCharge?';border-color:#5A4A28;color:var(--warn)':'')+'" onclick="markNoCharge(\''+o.id+'\')">'+
+      (o.noCharge ? 'Giveaway / personal use \u2713 \u00b7 tap to undo' : 'Mark as giveaway / personal use')+'</button>'+
     '<button class="btn pri full" style="margin-bottom:8px" onclick="orderAddSheet(\''+o.id+'\')">Add products</button>'+
     '<div class="sheetact"><button class="btn" onclick="pickOrder(\''+o.id+'\')">Pick into this</button>'+
     '<button class="btn" onclick="shipSheet(\''+o.id+'\')">Ship</button>'+
@@ -4821,6 +4858,29 @@ function unpickFromLine(o, l, qtyBack){
   const it = S.items.find(i => i.id === l.itemId);
   if(it) it.qty = num(it.qty) + (qtyBack - Math.max(0, left));
   return qtyBack - Math.max(0, left);
+}
+function markNoCharge(id){
+  const o = S.orders.find(x => x.id === id); if(!o) return;
+  if(!o.noCharge && !o._ncArmed){
+    o._ncArmed = true;
+    toast("Zeroes every price \u2014 tap again to confirm giveaway / personal use");
+    setTimeout(() => { delete o._ncArmed; }, 4000);
+    return;
+  }
+  delete o._ncArmed;
+  if(o.noCharge){
+    // Undo: flag off; prices stay 0 for you to re-enter by tapping lines.
+    o.noCharge = false;
+    save(); renderAll(); openOrder(id);
+    toast("Back to a normal order \u2014 set real prices on the lines");
+    return;
+  }
+  o.noCharge = true;
+  (o.lines||[]).forEach(l => { l.price = 0; });
+  S.txns.forEach(t => { if(t.orderId === id && t.dir === "out") t.price = 0; });
+  o.paidAt = o.paidAt || Date.now();   // nothing owed on a giveaway
+  save(); renderAll(); openOrder(id);
+  toast("No charge \u2014 cost stays on the books, revenue is zero");
 }
 function togglePaid(id){
   const o = S.orders.find(x => x.id === id); if(!o) return;
@@ -6247,6 +6307,7 @@ on("camBtn", "click", toggleCam);
 on("addItemBtn", "click", () => newItemSheet(""));
 on("tidyBtn", "click", tidySheet);
 on("repriceBtn", "click", repriceAllSheet);
+on("priceListBtn", "click", priceListSheet);
 on("demandBtn", "click", demandSheet);
 on("reorderBtn", "click", draftReorders);
 on("addSupplyBtn", "click", newSupplySheet);
