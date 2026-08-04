@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-0553-da3268";
+const BUILD = "20260804-0831-05652c";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4309,6 +4309,8 @@ function labelSheet(id, kind, stockKey){
     '<button class="btn" onclick="labelJpg(\''+id+'\',\''+kind+'\',\''+stockKey+'\')">JPG</button>'+
     '<button class="btn pri" onclick="printProductLabel(\''+id+'\',\''+kind+'\',\''+stockKey+'\', document.getElementById(\'lb_n\').value)">Print</button></div>'+
     '<button class="btn full" style="margin-top:8px" onclick="exportLabelJPG(\''+id+'\',\''+kind+'\',\''+stockKey+'\')">Save JPG for NIIMBOT</button>'+
+    '<button class="btn full" style="margin-bottom:8px" onclick="exportAllLabels(\''+kind+'\',\''+stockKey+'\')">Save ALL stocked \u00b7 '+(kind==="vial"?"Vial":kind==="kit"?"10-kit":kind==="shelf"?"Shelf":"Card")+' labels (ZIP)</button>'+
+    '<button class="btn full" style="margin-bottom:8px" onclick="exportAllLabels([\'vial\',\'kit\'],\''+stockKey+'\')">Save bin set \u00b7 singles + kits, every stocked product (ZIP)</button>'+
     '<p class="hint" style="margin-top:10px">Print needs a system printer. JPG saves this exact label at true size (300 dpi) \u2014 import it in the NIIMBOT app on '+st.w+'\u00d7'+st.h+' mm stock, set copies there, print.</p>');
 }
 function labelJpg(id, kind, stockKey, lotId){
@@ -4343,30 +4345,38 @@ function labelJpg(id, kind, stockKey, lotId){
   img.onerror = () => { URL.revokeObjectURL(url); toast("Export failed \u2014 tell Claude which browser you\u2019re on"); };
   img.src = url;
 }
+function renderLabelJPG(i, kind, stockKey, lot){
+  // 300 dpi = the print head. Pixel-exact for NIIMBOT image import.
+  return new Promise((resolve, reject) => {
+    const st = LABEL_STOCK[stockKey] || LABEL_STOCK["40x20"];
+    const DPI = 300, PXMM = DPI / 25.4;
+    const W = Math.round(st.w * PXMM), H = Math.round(st.h * PXMM);
+    const cssMM = 96 / 25.4;
+    const zoom = PXMM / cssMM;
+    const inner = productLabelHTML(i, kind, stockKey, lot);
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'">'+
+      '<foreignObject width="100%" height="100%">'+
+      '<div xmlns="http://www.w3.org/1999/xhtml" style="width:'+st.w+'mm;height:'+st.h+'mm;'+
+        'background:#fff;overflow:hidden;zoom:'+zoom+'">'+inner+'</div>'+
+      '</foreignObject></svg>';
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = W; c.height = H;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);
+      ctx.drawImage(img, 0, 0, W, H);
+      c.toBlob(b => b ? resolve(b) : reject(new Error("raster")), "image/jpeg", 0.95);
+    };
+    img.onerror = () => reject(new Error("svg"));
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  });
+}
 function exportLabelJPG(id, kind, stockKey, lotId){
   const i = S.items.find(x => x.id === id); if(!i) return;
   const st = LABEL_STOCK[stockKey] || LABEL_STOCK["40x20"];
   const lot = lotId ? S.lots.find(l => l.id === lotId) : null;
-  // 300 dpi = the M2's print head. Pixel-exact for NIIMBOT image import.
-  const DPI = 300, PXMM = DPI / 25.4;
-  const W = Math.round(st.w * PXMM), H = Math.round(st.h * PXMM);
-  const cssMM = 96 / 25.4;                      // browser CSS treats 1mm as 96dpi
-  const zoom = PXMM / cssMM;                    // upscale factor for a crisp raster
-  const inner = productLabelHTML(i, kind, stockKey, lot);
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'">'+
-    '<foreignObject width="100%" height="100%">'+
-    '<div xmlns="http://www.w3.org/1999/xhtml" style="width:'+st.w+'mm;height:'+st.h+'mm;'+
-      'background:#fff;overflow:hidden;zoom:'+zoom+'">'+inner+'</div>'+
-    '</foreignObject></svg>';
-  const img = new Image();
-  img.onload = () => {
-    const c = document.createElement("canvas");
-    c.width = W; c.height = H;
-    const ctx = c.getContext("2d");
-    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);   // JPG has no alpha \u2014 paint the paper
-    ctx.drawImage(img, 0, 0, W, H);
-    c.toBlob(b => {
-      if(!b){ toast("Export failed \u2014 try the print preview instead"); return; }
+  renderLabelJPG(i, kind, stockKey, lot).then(b => {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(b);
       a.download = (i.code || "label")
@@ -4375,10 +4385,66 @@ function exportLabelJPG(id, kind, stockKey, lotId){
       document.body.appendChild(a); a.click();
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
       toast("Saved \u2014 import it in the NIIMBOT app and set copies there");
-    }, "image/jpeg", 0.95);
-  };
-  img.onerror = () => toast("Could not render the label \u2014 use the print preview");
-  img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  }).catch(() => toast("Could not render the label \u2014 use the print preview"));
+}
+// --- minimal ZIP (store mode): enough for a folder of JPGs, no dependencies ---
+const _crcT = (() => { const t=[]; for(let n=0;n<256;n++){ let c=n;
+  for(let k=0;k<8;k++) c = (c&1) ? 0xEDB88320 ^ (c>>>1) : c>>>1; t[n]=c>>>0; } return t; })();
+function _crc32(u8){ let c=0xFFFFFFFF;
+  for(let i=0;i<u8.length;i++) c = _crcT[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0; }
+function zipStore(files){          // files: [{name, data:Uint8Array}]
+  const chunks = [], central = [];
+  let off = 0;
+  const le = (n, w) => { const a=[]; for(let i=0;i<w;i++) a.push((n>>>(8*i))&0xFF); return a; };
+  files.forEach(f => {
+    const nm = new TextEncoder().encode(f.name);
+    const crc = _crc32(f.data), sz = f.data.length;
+    const local = new Uint8Array([0x50,0x4B,3,4, ...le(20,2), 0,0, 0,0, 0,0,0,0,
+      ...le(crc,4), ...le(sz,4), ...le(sz,4), ...le(nm.length,2), 0,0]);
+    chunks.push(local, nm, f.data);
+    central.push({nm, crc, sz, off});
+    off += local.length + nm.length + sz;
+  });
+  const cdStart = off;
+  central.forEach(c => {
+    const rec = new Uint8Array([0x50,0x4B,1,2, ...le(20,2), ...le(20,2), 0,0, 0,0, 0,0,0,0,
+      ...le(c.crc,4), ...le(c.sz,4), ...le(c.sz,4), ...le(c.nm.length,2),
+      0,0, 0,0, 0,0, 0,0, 0,0,0,0, ...le(c.off,4)]);
+    chunks.push(rec, c.nm);
+    off += rec.length + c.nm.length;
+  });
+  chunks.push(new Uint8Array([0x50,0x4B,5,6, 0,0, 0,0,
+    ...le(files.length,2), ...le(files.length,2), ...le(off - cdStart,4), ...le(cdStart,4), 0,0]));
+  return new Blob(chunks, {type:"application/zip"});
+}
+async function exportAllLabels(kindOrKinds, stockKey){
+  const kinds = Array.isArray(kindOrKinds) ? kindOrKinds : [kindOrKinds];
+  const st = LABEL_STOCK[stockKey] || LABEL_STOCK["50x30"];
+  const list = S.items.filter(i => !i.kind && num(i.qty) > 0)
+    .sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  if(!list.length){ toast("Nothing in stock to label"); return; }
+  toast("Rendering "+(list.length*kinds.length)+" labels\u2026");
+  const tag = k => k==="vial" ? "single" : k==="kit" ? "kit" : k;
+  const files = [];
+  for(const i of list){
+    for(const k of kinds){
+      try{
+        const b = await renderLabelJPG(i, k, stockKey, null);
+        files.push({name:(i.code||i.name.replace(/[^A-Za-z0-9]+/g,""))
+                    + (kinds.length>1 ? "_"+tag(k) : "")
+                    + "_" + st.w + "x" + st.h + "mm_300dpi.jpg",
+                    data:new Uint8Array(await b.arrayBuffer())});
+      }catch(e){ toast("Skipped "+i.name+" ("+tag(k)+") \u2014 would not render"); }
+    }
+  }
+  if(!files.length){ toast("No labels rendered"); return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(zipStore(files));
+  a.download = "ITL-"+(kinds.length>1 ? "bin-set" : kinds[0])+"-labels-"+st.w+"x"+st.h+"mm-300dpi.zip";
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+  toast(files.length+" labels in the ZIP \u2014 print one, scan it, then run the roll");
 }
 function printProductLabel(id, kind, stockKey, copies, lotId){
   const i = S.items.find(x => x.id === id); if(!i) return;
