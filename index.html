@@ -333,7 +333,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-1907-f6ccc2";
+const BUILD = "20260804-2148-9da869";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1515,6 +1515,18 @@ function openCust(id){
       '<div><div class="k">Orders</div><div class="v">'+orders.length+'</div></div>'+
       '<div><div class="k">Spent</div><div class="v">'+money(spend)+'</div></div>'+
       '<div><div class="k">Last</div><div class="v">'+(orders.length?new Date(orders[orders.length-1].created).toLocaleDateString(undefined,{month:"short",day:"numeric"}):"—")+'</div></div></div>'+
+    (orders.length ? '<div class="eyebrow" style="margin:4px 0 6px"><span>Their orders</span></div>'+
+      orders.slice().sort((a,b)=>num(b.created)-num(a.created)).map(o => {
+        const t = orderTotals(o);
+        const badge = o.noCharge ? '<span class="pill">no charge</span>'
+          : o.status === "done" ? '<span class="pill ok">closed \u2713</span>'
+          : o.paidAt ? '<span class="pill ok">paid</span>'
+          : '<span class="pill">open</span>';
+        return '<button class="row" onclick="closeSheet();openOrder(\''+o.id+'\')"><span class="nm"><b>'+esc(o.ref)+'</b>'+
+          '<small>'+new Date(o.created).toLocaleDateString(undefined,{month:"short",day:"numeric"})+
+          ' \u00b7 '+(o.lines||[]).length+' line'+((o.lines||[]).length===1?'':'s')+'</small></span>'+
+          '<span class="rt"><b>'+money(t.rev)+'</b>'+badge+'</span></button>';
+      }).join("")+'<div style="height:8px"></div>' : '')+
     '<button class="btn full" style="margin-bottom:8px;border-color:#28503A;color:var(--ok)" onclick="repeatLastOrder(\''+id+'\')">Repeat their last order</button>'+
     (c.phone ? '<a class="btn full" style="margin-bottom:8px" href="'+waLink(c.phone,"")+'" target="_blank" rel="noopener">WhatsApp them</a>' : '')+
     '<div class="sheetact"><button class="btn" onclick="closeSheet()">Close</button>'+
@@ -1685,9 +1697,14 @@ function poMessage(po){
   po.lines.forEach(l => {
     const it = S.items.find(x => x.id === l.itemId);
     const rec = cats.find(p => p.itemId === l.itemId);
-    let label = (rec && rec.cat) ? rec.cat : (it ? it.name : "item");
-    // Without a catalogue number the dose is what makes it unambiguous.
-    if(!(rec && rec.cat) && it && it.dose) label += " " + it.dose + "mg";
+    // Vendors read their own catalogue number first, then their own wording for
+    // the product; ours is the last resort. The dose only gets appended when the
+    // name does not already carry it.
+    let label = (rec && rec.cat) ? rec.cat
+              : (rec && rec.name) ? rec.name
+              : (it ? it.name : "item");
+    if(!(rec && rec.cat) && it && it.dose && !nameHasDose(label, it.dose, doseUnit(it)))
+      label += " " + it.dose + doseUnit(it).toLowerCase();
     const k = num(l.kits), p = num(l.kitPrice);
     out.push(label + " " + k + " kit" + (k === 1 ? "" : "s") + " " + k + "×" + p + "=" + (k*p));
   });
@@ -6067,8 +6084,8 @@ function labelHTML(o, key){
         '<span>'+esc(o.ref)+'</span><span>'+esc(o.carrier||"")+'</span></div>'+
       '<div style="height:'+(compact?".28in":".5in")+';margin:.04in 0">'+code128svg(code).replace("<svg ",'<svg style="width:100%;height:100%" ')+'</div>'+
       '<div style="font-size:'+(base-5)+'pt;font-family:monospace;letter-spacing:.12em;text-align:center">'+esc(code)+'</div>'+
-      (compact ? "" : '<div style="font-size:'+(base-4)+'pt;margin-top:.06in;line-height:1.3">'+esc(orderItemsText(o))+
-        (o.tracking ? '<br><b>Tracking:</b> '+esc(o.tracking) : '')+'</div>')+
+      (compact || !o.tracking ? "" :
+        '<div style="font-size:'+(base-4)+'pt;margin-top:.06in;line-height:1.3"><b>Tracking:</b> '+esc(o.tracking)+'</div>')+
     '</div></div>';
 }
 function printLabel(oid, key){
