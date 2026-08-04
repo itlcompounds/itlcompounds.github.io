@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-0241-7e9675";
+const BUILD = "20260804-0248-704b24";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4369,9 +4369,98 @@ function wireLotCalc(){
   ids.forEach(id => $(id).addEventListener("input", calc));
   calc();
 }
+let bulkDraft = { qty:{}, cost:{} };
+function bulkStockSheet(filter, fresh){
+  if(fresh) bulkDraft = { qty:{}, cost:{} };
+  const q = String(filter||"").trim().toLowerCase();
+  const az = (a,b) => (a.name||"").localeCompare(b.name||"");
+  const picked = S.items.filter(i => num(bulkDraft.qty[i.id]) > 0).sort(az);
+  const rest = S.items.filter(i => !(num(bulkDraft.qty[i.id]) > 0) &&
+      (!q || (i.name||"").toLowerCase().includes(q) || (i.code||"").toLowerCase().includes(q)))
+    .sort(az);
+  const lbl = t => '<small style="display:block;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-align:center;margin-bottom:2px">'+t+'</small>';
+  const rows = picked.concat(rest).map(i => {
+    const v = bulkDraft.qty[i.id] || "0";
+    // Best cost guess: real lots first, else cheapest vendor — still editable.
+    const cb = costBasis(i);
+    const cv = bulkDraft.cost[i.id] != null ? bulkDraft.cost[i.id] : (cb > 0 ? cb.toFixed(2) : "");
+    if(bulkDraft.cost[i.id] == null && cb > 0) bulkDraft.cost[i.id] = cb.toFixed(2);
+    return '<div class="row'+(num(v)>0?' po_row_active':'')+' po_row" id="bsr_'+i.id+'">'+
+      '<span class="nm"><b>'+esc(i.name)+'</b>'+
+      '<small><b>'+esc(i.code||"")+'</b> \u00b7 '+num(i.qty)+' on hand now</small></span>'+
+      '<span style="display:flex;gap:6px;align-items:flex-end;margin-left:auto">'+
+      '<span style="width:58px;flex:none">'+lbl('vials')+'<input class="num bs_q" data-item="'+i.id+'" type="number" inputmode="numeric" min="0" step="1" value="'+v+'" style="text-align:center;padding:6px"></span>'+
+      '<span style="width:74px;flex:none">'+lbl('$/vial')+'<input class="num bs_c" data-item="'+i.id+'" type="number" step="any" inputmode="decimal" value="'+cv+'" placeholder="cost" style="text-align:center;padding:6px"></span>'+
+      '</span></div>';
+  }).join("");
+  sheet('<h2>Opening stock</h2>'+
+    '<p class="hint" style="margin-top:-6px">For shelf stock that predates the entered orders. Counts what is physically there; one lot per product, coded OPENING-0802. Do NOT re-add anything a received order already put in stock.</p>'+
+    '<input id="bs_search" type="search" placeholder="Search products\u2026" value="'+esc(filter||"")+'" '+
+      'oninput="bulkStockSheet(this.value)" '+
+      'style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px">'+
+    '<p class="hint" id="bs_count" style="margin:0 0 6px"></p>'+
+    '<div style="max-height:52vh;overflow-y:auto">'+(rows || '<p class="hint">Nothing matches.</p>')+'</div>'+
+    '<div class="sheetact"><button class="btn" onclick="closeSheet()">Cancel</button>'+
+    '<button class="btn pri" id="bs_go">Create lots</button></div>');
+  setTimeout(() => {
+    const go = document.getElementById('bs_go');
+    if(go) go.onclick = bulkStockCommit;
+    const recount = () => {
+      let items = 0, vials = 0, val = 0;
+      Object.keys(bulkDraft.qty).forEach(id => {
+        const n = num(bulkDraft.qty[id]);
+        if(n > 0){ items++; vials += n; val += n * num(bulkDraft.cost[id]); }
+      });
+      const c = document.getElementById('bs_count');
+      if(c) c.innerHTML = items ? '<b>'+items+' product'+(items===1?'':'s')+'</b> \u00b7 '+vials+' vial'+(vials===1?'':'s')+' \u00b7 '+money(val)+' at cost' : '';
+    };
+    document.querySelectorAll(".bs_q").forEach(el => el.addEventListener("input", function(){
+      bulkDraft.qty[this.dataset.item] = this.value;
+      const row = document.getElementById("bsr_"+this.dataset.item);
+      if(row) row.classList.toggle("po_row_active", num(this.value) > 0);
+      recount();
+    }));
+    document.querySelectorAll(".bs_c").forEach(el => el.addEventListener("input", function(){
+      bulkDraft.cost[this.dataset.item] = this.value;
+      recount();
+    }));
+    recount();
+    const sb = document.getElementById('bs_search');
+    if(sb && filter != null){ try{ sb.focus(); sb.setSelectionRange(sb.value.length, sb.value.length); }catch(e){} }
+  }, 0);
+}
+function bulkStockCommit(){
+  const wants = [];
+  let fraction = null;
+  Object.keys(bulkDraft.qty).forEach(id => {
+    const n = num(bulkDraft.qty[id]);
+    if(n > 0){
+      const it = S.items.find(x => x.id === id);
+      if(n % 1 !== 0 && !fraction) fraction = it ? it.name : "a product";
+      wants.push({it, qty:n, cost:num(bulkDraft.cost[id])});
+    }
+  });
+  if(!wants.length){ toast("Type a vial count first"); return; }
+  if(fraction){ toast("Whole vials only \u2014 check "+fraction); return; }
+  let lots = 0, vials = 0;
+  wants.forEach(w => {
+    if(!w.it) return;
+    S.lots.push({id:uid("l"), code:"OPENING-0802", itemId:w.it.id, supplierId:"",
+      date:Date.now(), vials:w.qty, remaining:w.qty,
+      product:w.qty * w.cost, shipping:0, customs:0, fees:0, supplies:0, other:0,
+      testCost:0, purity:"", legacy:true});
+    w.it.qty = num(w.it.qty) + w.qty;
+    lots++; vials += w.qty;
+  });
+  bulkDraft = { qty:{}, cost:{} };
+  save(); renderAll(); closeSheet();
+  toast(lots+" opening lot"+(lots===1?"":"s")+" \u00b7 "+vials+" vials on the books");
+}
 function newLotSheet(){
   if(!S.items.length){ toast("Add a product first"); switchTab("stock"); return; }
-  sheet('<h2>New lot</h2>'+lotFields(null)+
+  sheet('<h2>New lot</h2>'+
+    '<button class="btn full" style="margin-bottom:10px" onclick="bulkStockSheet(\'\', true)">Opening stock \u00b7 add many products at once</button>'+
+    lotFields(null)+
     '<div class="sheetact"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveNewLot()">Save lot</button></div>');
   wireLotCalc();
 }
