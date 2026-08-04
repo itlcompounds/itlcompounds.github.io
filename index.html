@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-0248-704b24";
+const BUILD = "20260804-0252-663012";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4381,8 +4381,8 @@ function bulkStockSheet(filter, fresh){
   const lbl = t => '<small style="display:block;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-align:center;margin-bottom:2px">'+t+'</small>';
   const rows = picked.concat(rest).map(i => {
     const v = bulkDraft.qty[i.id] || "0";
-    // Best cost guess: real lots first, else cheapest vendor — still editable.
-    const cb = costBasis(i);
+    // You buy by the kit, so the price box is per KIT — the app does the /10.
+    const cb = costBasis(i) * 10;
     const cv = bulkDraft.cost[i.id] != null ? bulkDraft.cost[i.id] : (cb > 0 ? cb.toFixed(2) : "");
     if(bulkDraft.cost[i.id] == null && cb > 0) bulkDraft.cost[i.id] = cb.toFixed(2);
     return '<div class="row'+(num(v)>0?' po_row_active':'')+' po_row" id="bsr_'+i.id+'">'+
@@ -4390,11 +4390,11 @@ function bulkStockSheet(filter, fresh){
       '<small><b>'+esc(i.code||"")+'</b> \u00b7 '+num(i.qty)+' on hand now</small></span>'+
       '<span style="display:flex;gap:6px;align-items:flex-end;margin-left:auto">'+
       '<span style="width:58px;flex:none">'+lbl('vials')+'<input class="num bs_q" data-item="'+i.id+'" type="number" inputmode="numeric" min="0" step="1" value="'+v+'" style="text-align:center;padding:6px"></span>'+
-      '<span style="width:74px;flex:none">'+lbl('$/vial')+'<input class="num bs_c" data-item="'+i.id+'" type="number" step="any" inputmode="decimal" value="'+cv+'" placeholder="cost" style="text-align:center;padding:6px"></span>'+
+      '<span style="width:74px;flex:none">'+lbl('$/kit')+'<input class="num bs_c" data-item="'+i.id+'" type="number" step="any" inputmode="decimal" value="'+cv+'" placeholder="cost" style="text-align:center;padding:6px"></span>'+
       '</span></div>';
   }).join("");
   sheet('<h2>Opening stock</h2>'+
-    '<p class="hint" style="margin-top:-6px">For shelf stock that predates the entered orders. Counts what is physically there; one lot per product, coded OPENING-0802. Do NOT re-add anything a received order already put in stock.</p>'+
+    '<p class="hint" style="margin-top:-6px">For shelf stock that predates the entered orders. Counts what is physically there (vials, since kits break); price is per KIT and the app divides by ten. One lot per product, coded OPENING-0802. Do NOT re-add anything a received order already put in stock.</p>'+
     '<input id="bs_search" type="search" placeholder="Search products\u2026" value="'+esc(filter||"")+'" '+
       'oninput="bulkStockSheet(this.value)" '+
       'style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px">'+
@@ -4409,7 +4409,7 @@ function bulkStockSheet(filter, fresh){
       let items = 0, vials = 0, val = 0;
       Object.keys(bulkDraft.qty).forEach(id => {
         const n = num(bulkDraft.qty[id]);
-        if(n > 0){ items++; vials += n; val += n * num(bulkDraft.cost[id]); }
+        if(n > 0){ items++; vials += n; val += n * num(bulkDraft.cost[id]) / 10; }
       });
       const c = document.getElementById('bs_count');
       if(c) c.innerHTML = items ? '<b>'+items+' product'+(items===1?'':'s')+'</b> \u00b7 '+vials+' vial'+(vials===1?'':'s')+' \u00b7 '+money(val)+' at cost' : '';
@@ -4447,7 +4447,7 @@ function bulkStockCommit(){
     if(!w.it) return;
     S.lots.push({id:uid("l"), code:"OPENING-0802", itemId:w.it.id, supplierId:"",
       date:Date.now(), vials:w.qty, remaining:w.qty,
-      product:w.qty * w.cost, shipping:0, customs:0, fees:0, supplies:0, other:0,
+      product:w.qty * w.cost / 10, shipping:0, customs:0, fees:0, supplies:0, other:0,
       testCost:0, purity:"", legacy:true});
     w.it.qty = num(w.it.qty) + w.qty;
     lots++; vials += w.qty;
