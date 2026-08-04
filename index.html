@@ -333,7 +333,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-2148-9da869";
+const BUILD = "20260804-2317-fee6a8";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -2806,6 +2806,33 @@ function importPasted(supId){
   if(!txt.trim()){ toast("Paste the list first"); return; }
   beginReview(supId, looksCatalog(txt) ? parseCatalog(txt) : parseFlexible(txt.split(/\r?\n/)));
 }
+function createProductForPrice(supId, ix){
+  const sup = S.suppliers.find(x => x.id === supId); if(!sup) return;
+  const nm = ($("ep_name").value || "").trim();
+  if(!nm){ toast("Type the name on their list first"); return; }
+  // Dose and unit come out of the vendor's own wording: "HGH 45iu" -> 45 IU.
+  const m = nm.match(/(\d+(?:\.\d+)?)\s*(mg|iu|mcg)\b/i);
+  const dose = m ? m[1] : "";
+  const unit = m ? m[2].toLowerCase() : "mg";
+  let it = S.items.find(i => normName(i.name) === normName(nm) && String(i.dose||"") === String(dose||""));
+  const existed = !!it;
+  if(!it){
+    it = {id:uid("i"), name:nm, dose, unit, code:uniqueCodeFor(nm, dose, null),
+          bin:"", price:0, qty:0, reorder:0, orderQty:0, supplierId:supId,
+          weight:0, catalog:true};
+    S.items.push(it);
+  }
+  sup.prices = sup.prices || [];
+  const cat = $("ep_cat").value.trim(), kp = num($("ep_price").value);
+  if(ix < 0){
+    sup.prices.push({name:nm, cat, kitPrice:kp, itemId:it.id, perKit:10});
+  } else {
+    const p = sup.prices[ix];
+    if(p){ p.name = nm; p.cat = cat; p.kitPrice = kp; p.itemId = it.id; }
+  }
+  save(); priceSheet(supId);
+  toast((existed ? "Linked to " : "Created ") + it.name + " \u00b7 " + it.code);
+}
 // Everything the parser guessed at stays correctable after the fact.
 function editPrice(supId, ix){
   const sup = S.suppliers.find(x => x.id === supId); if(!sup) return;
@@ -2820,6 +2847,9 @@ function editPrice(supId, ix){
     '<div class="field"><label>Price per kit</label><input id="ep_price" type="number" step="any" value="'+num(p.kitPrice)+'"></div></div>'+
     '<div class="field"><label>Matched product</label><select id="ep_item">'+opts+'</select></div>'+
     '<p class="hint">The catalogue number is what goes in the WhatsApp order, so it is worth getting right. Renaming here does not rename the product — do that in Stock.</p>'+
+    '<button class="btn full" style="margin-bottom:8px" onclick="createProductForPrice(\''+supId+'\','+ix+')">'+
+      'Create the product from this row &amp; link it</button>'+
+    '<p class="hint" style="margin-top:-4px">An unmatched row cannot be ordered \u2014 purchases pick products, not price lines. This makes the product, gives it a unique code, and links it in one step.</p>'+
     '<div class="sheetact">'+(adding ? '<button class="btn" onclick="priceSheet(\''+supId+'\')">Cancel</button>'
       : '<button class="btn warn" onclick="dropPrice(\''+supId+'\','+ix+')">Delete</button>')+
     '<button class="btn pri" onclick="savePriceRow(\''+supId+'\','+ix+')">Save</button></div>');
