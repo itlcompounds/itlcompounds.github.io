@@ -329,7 +329,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-0105-16d382";
+const BUILD = "20260804-0156-5185ee";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4439,9 +4439,19 @@ function shipChargedSelect(id, cur){
   return '<select id="'+id+'">'+list.map(x =>
     '<option value="'+x+'"'+(x===v?' selected':'')+'>'+(x===0?'No shipping charge':money(x))+'</option>').join("")+'</select>';
 }
+function nextRef(list, prefix){
+  // Reads every existing ref for its number ("#003 - J.R." -> 3, "Q-012" -> 12)
+  // so renamed or imported refs never cause a collision — always max + 1.
+  let hi = 0;
+  (list||[]).forEach(x => {
+    const m = String(x.ref||"").match(/(\d+)/);
+    if(m) hi = Math.max(hi, parseInt(m[1], 10));
+  });
+  return prefix + String(hi + 1).padStart(3, "0");
+}
 function newOrderSheet(){
   sheet('<h2>New order</h2>'+
-    '<div class="field"><label>Customer or order reference</label><input id="o_ref" placeholder="e.g. #1042 — J. Rivera"></div>'+
+    '<div class="field"><label>Order reference — add a name after it if you like</label><input id="o_ref" value="'+nextRef(S.orders, "#")+'"></div>'+
     '<div class="grid2"><div class="field"><label>Shipping charged</label>'+shipChargedSelect("o_sc",0)+'</div>'+
     '<div class="field"><label>Postage cost</label><input id="o_scost" type="number" step="any" inputmode="decimal" value="0"></div></div>'+
     '<p class="hint">Saving this puts you in picking mode — every scan on the Scan tab drops into this order.</p>'+
@@ -4449,7 +4459,7 @@ function newOrderSheet(){
   setTimeout(() => $("o_ref").focus(), 60);
 }
 function saveNewOrder(){
-  const ref = $("o_ref").value.trim() || ("Order " + (S.orders.length+1));
+  const ref = $("o_ref").value.trim() || nextRef(S.orders, "#");
   const o = {id:uid("o"), ref, created:Date.now(), status:"open", lines:[],
              shipCharged:num($("o_sc").value), shipCost:num($("o_scost").value), carrier:"", tracking:""};
   S.orders.push(o); S.activeOrder = o.id; mode = "out"; setMode();
@@ -5267,7 +5277,7 @@ function quoteTotals(q){
   return {rev, cost, profit: rev - cost, margin: rev > 0 ? (rev-cost)/rev*100 : 0, estimated: anyEst};
 }
 function newQuote(){
-  const q = {id:uid("q"), ref:"", customerId:"", created:Date.now(), lines:[],
+  const q = {id:uid("q"), ref:nextRef(S.quotes, "Q-"), customerId:"", created:Date.now(), lines:[],
              shipCharged:0, validDays:7, note:""};
   S.quotes.push(q); save(); openQuote(q.id);
 }
