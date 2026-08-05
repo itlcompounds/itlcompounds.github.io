@@ -333,7 +333,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260805-0532-2786bd";
+const BUILD = "20260805-0536-02cac0";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4028,7 +4028,7 @@ async function persistLogo(d){
 function processLogo(src, threshold, cb){
   const img = new Image();
   img.onload = () => {
-    const maxW = 420;                       // plenty for a 300 dpi strip ~10 mm tall
+    const maxW = 1400;                      // headroom: the label draws it ~110 px wide at 300 dpi
     const sc = Math.min(1, maxW / img.width);
     const w = Math.max(1, Math.round(img.width*sc)), h = Math.max(1, Math.round(img.height*sc));
     const c = document.createElement("canvas");
@@ -4049,6 +4049,12 @@ function processLogo(src, threshold, cb){
   };
   img.onerror = () => cb(null);
   img.src = src;
+}
+function useBuiltInLogo(backId, kind, stockKey){
+  persistLogo(DEFAULT_LOGO).then(() => {
+    toast("Using the built-in ITL mark");
+    brandSheet(backId, kind, stockKey);
+  });
 }
 function brandSheet(backId, kind, stockKey){
   const back = backId ? 'onclick="labelSheet(\''+backId+'\',\''+(kind||"vial")+'\',\''+(stockKey||"50x30")+'\')"' : 'onclick="closeSheet()"';
@@ -4082,12 +4088,15 @@ function brandSheet(backId, kind, stockKey){
       '<input type="range" id="lg_th" min="40" max="220" value="'+(S.settings.logoThreshold||150)+'"></div>'+
     '<div class="eyebrow" style="margin:12px 0 6px">How it will print</div>'+
     '<div style="background:#fff;padding:10px;border-radius:4px;display:flex;justify-content:center;min-height:60px;align-items:center">'+
-      '<img id="lg_prev" src="'+(LOGO||"")+'" style="max-width:100%;max-height:80px;image-rendering:pixelated;'+(LOGO?"":"display:none")+'">'+
+      '<img id="lg_prev" src="'+(LOGO||"")+'" style="max-width:100%;max-height:80px;image-rendering:auto;'+(LOGO?"":"display:none")+'">'+
       (LOGO?"":'<span style="color:#999;font-size:13px">No logo yet</span>')+
     '</div>'+
     '<div class="modebar" style="grid-template-columns:1fr 1fr;margin-top:12px">'+
       '<button id="lg_on"  aria-pressed="'+(S.settings.logoOn!==false?"true":"false")+'">Show on labels</button>'+
       '<button id="lg_off" aria-pressed="'+(S.settings.logoOn===false?"true":"false")+'">Hide</button></div>'+
+    '<button class="btn full" style="margin-bottom:8px" onclick="useBuiltInLogo('+
+      (backId ? "'"+backId+"'" : "null")+',\''+(kind||"vial")+'\',\''+(stockKey||"50x30")+'\')">Use the built-in ITL mark</button>'+
+    '<p class="hint" style="margin-top:-4px">Re-upload your logo after an app update to pick up a sharper conversion, or take the built-in mark.</p>'+
     '<div class="sheetact"><button class="btn" '+back+'>Back</button>'+
     '<button class="btn warn" onclick="clearLogo()">Remove</button></div>');
 
@@ -4122,7 +4131,7 @@ function logoTag(st){
   // Skip on strips too short to give the mark any real height.
   if(!LOGO || S.settings.logoOn === false || st.h < 18) return "";
   return '<img src="'+LOGO+'" style="height:'+(st.h*0.17)+'mm;max-width:100%;object-fit:contain;'+
-    'object-position:left;display:block;margin-bottom:.5mm;image-rendering:pixelated">';
+    'object-position:left;display:block;margin-bottom:.5mm;image-rendering:auto">';
 }
 
 /* ============ product labels ============ */
@@ -4157,7 +4166,7 @@ function brandMark(h, small, tagline){
   const fs = small * (lines.length > 1 ? 0.82 : 0.95);
   return '<div style="display:flex;align-items:center;gap:1mm">'+
     (useImage
-      ? '<img src="'+LOGO+'" style="height:'+h+'mm;display:block;image-rendering:pixelated">'
+      ? '<img src="'+LOGO+'" style="height:'+h+'mm;display:block;image-rendering:auto">'
       : '<div style="font-family:\'ITLBrand\',Helvetica,sans-serif;font-style:italic;font-size:'+(small*1.35)+'mm;font-weight:700;letter-spacing:.01em;line-height:1">ITL</div>')+
     (lines.length
       ? '<div style="font-family:\'ITLBrand\',Helvetica,sans-serif;font-style:italic;font-size:'+fs+'mm;'+
