@@ -333,7 +333,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260804-2317-fee6a8";
+const BUILD = "20260805-0047-097cda";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4788,6 +4788,7 @@ function openOrder(id){
     (o.status === "done"
       ? '<button class="btn full" style="margin-bottom:8px" onclick="reopenOrder(\''+o.id+'\')">Completed \u2713 \u00b7 tap to reopen</button>'
       : '<button class="btn full" style="margin-bottom:8px" onclick="completeOrder(\''+o.id+'\')">Complete &amp; close</button>')+
+    '<button class="btn full" style="margin-bottom:8px" onclick="pickTicketSheet(\''+o.id+'\')">Pick ticket</button>'+
     '<button class="btn full" style="margin-bottom:8px'+(o.noCharge?';border-color:#5A4A28;color:var(--warn)':'')+'" onclick="markNoCharge(\''+o.id+'\')">'+
       (o.noCharge ? 'Giveaway / personal use \u2713 \u00b7 tap to undo' : 'Mark as giveaway / personal use')+'</button>'+
     '<button class="btn pri full" style="margin-bottom:8px" onclick="orderAddSheet(\''+o.id+'\')">Add products</button>'+
@@ -5005,11 +5006,84 @@ function markNoCharge(id){
   save(); renderAll(); openOrder(id);
   toast("No charge \u2014 cost stays on the books, revenue is zero");
 }
+function pickTicketHTML(o){
+  const c = S.customers.find(x => x.id === o.customerId);
+  // Sorted by bin so the picker walks the shelves once, in order.
+  const lines = (o.lines || []).slice().map(l => {
+    const it = S.items.find(i => i.id === l.itemId) || {};
+    return {bin: (it.bin || "").toUpperCase(), name: it.name || "item",
+            code: it.code || "", qty: num(l.qty)};
+  }).sort((a, b) => (a.bin || "zz").localeCompare(b.bin || "zz", undefined, {numeric:true}));
+  const total = lines.reduce((n, l) => n + l.qty, 0);
+  const rows = lines.map(l =>
+    '<tr>'+
+    '<td style="border:1px solid #000;padding:8px 6px;text-align:center;width:52px;font-size:26px;font-weight:800">'+
+      (l.bin || "\u2014")+'</td>'+
+    '<td style="border:1px solid #000;padding:8px 10px">'+
+      '<div style="font-size:17px;font-weight:700">'+esc(l.name)+'</div>'+
+      '<div style="font-size:12px;font-family:monospace">'+esc(l.code)+'</div></td>'+
+    '<td style="border:1px solid #000;padding:8px;text-align:center;width:70px;font-size:30px;font-weight:800">'+
+      l.qty+'</td>'+
+    '<td style="border:1px solid #000;width:52px"></td>'+
+    '</tr>').join("");
+  return '<div style="font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;padding:14mm 12mm">'+
+    '<div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #000;padding-bottom:6px">'+
+      '<div style="font-size:30px;font-weight:800">PICK TICKET</div>'+
+      '<div style="text-align:right;font-size:14px">'+esc(o.ref || "")+'<br>'+
+        new Date(o.created || Date.now()).toLocaleDateString()+'</div></div>'+
+    '<div style="margin:10px 0 4px;font-size:20px;font-weight:700">'+esc(c ? c.name : "Customer")+'</div>'+
+    '<div style="font-size:13px;margin-bottom:10px">'+lines.length+' product'+(lines.length===1?'':'s')+
+      ' \u00b7 '+total+' vial'+(total===1?'':'s')+' \u00b7 walk the bins top to bottom</div>'+
+    '<table style="width:100%;border-collapse:collapse">'+
+      '<tr><th style="border:1px solid #000;padding:4px;font-size:11px">BIN</th>'+
+      '<th style="border:1px solid #000;padding:4px;font-size:11px;text-align:left">PRODUCT</th>'+
+      '<th style="border:1px solid #000;padding:4px;font-size:11px">VIALS</th>'+
+      '<th style="border:1px solid #000;padding:4px;font-size:11px">\u2713</th></tr>'+
+      rows+'</table>'+
+    '<div style="margin-top:14px;border:2px solid #000;padding:10px;font-size:13px;line-height:1.7">'+
+      '<b>BEFORE SEALING</b><br>'+
+      '\u25a1 Every line ticked and the vial count matches<br>'+
+      '\u25a1 Take vials from the FRONT bin only \u2014 sealed kits stay in the back<br>'+
+      '\u25a1 Wrapped, padded, nothing loose in the box<br>'+
+      '\u25a1 Ship label on the outside, this ticket left out'+
+    '</div>'+
+    '<div style="margin-top:10px;font-size:12px">Picked by ______________________  Time ____________</div>'+
+    '</div>';
+}
+function printPickTicket(id){
+  const o = S.orders.find(x => x.id === id); if(!o) return;
+  if(!(o.lines || []).length){ toast("Nothing on this order to pick"); return; }
+  const old = document.getElementById("printarea"); if(old) old.remove();
+  const oldSt = document.getElementById("pagesize"); if(oldSt) oldSt.remove();
+  const style = document.createElement("style");
+  style.id = "pagesize";
+  style.textContent = "@page{size:letter;margin:0}";
+  document.head.appendChild(style);
+  const d = document.createElement("div");
+  d.id = "printarea";
+  d.innerHTML = pickTicketHTML(o);
+  document.body.appendChild(d);
+  setTimeout(() => window.print(), 60);
+  const cleanup = () => { d.remove(); style.remove(); window.removeEventListener("afterprint", cleanup); };
+  window.addEventListener("afterprint", cleanup);
+  setTimeout(cleanup, 60000);
+}
+function pickTicketSheet(id){
+  const o = S.orders.find(x => x.id === id); if(!o) return;
+  sheet('<h2>Pick ticket</h2>'+
+    '<p class="hint" style="margin-top:-6px">Sorted by bin so whoever picks it walks the shelves once. Hand them this sheet.</p>'+
+    '<div style="max-height:52vh;overflow:auto;border:1px solid var(--line);border-radius:8px">'+pickTicketHTML(o)+'</div>'+
+    '<div class="sheetact"><button class="btn" onclick="openOrder(\''+o.id+'\')">Back to the order</button>'+
+    '<button class="btn pri" onclick="printPickTicket(\''+o.id+'\')">Print</button></div>');
+}
 function togglePaid(id){
   const o = S.orders.find(x => x.id === id); if(!o) return;
   o.paidAt = o.paidAt ? null : Date.now();
   save(); renderAll(); toast(o.paidAt ? "Marked paid" : "Marked unpaid");
-  openOrder(id);
+  // Paid means it is ready to go out the door: raise the pick ticket so
+  // whoever is picking can be handed a sheet without hunting for it.
+  if(o.paidAt && (o.lines||[]).length) pickTicketSheet(id);
+  else openOrder(id);
 }
 function completeOrder(id){
   const o = S.orders.find(x => x.id === id); if(!o) return;
