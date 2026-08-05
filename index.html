@@ -333,7 +333,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260805-0047-097cda";
+const BUILD = "20260805-0505-9cf252";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4652,6 +4652,7 @@ function bulkStockCommit(){
       product:w.qty * w.cost / 10, shipping:0, customs:0, fees:0, supplies:0, other:0,
       testCost:0, purity:"", legacy:true});
     w.it.qty = num(w.it.qty) + w.qty;
+    w.it.catalog = false;
     lots++; vials += w.qty;
   });
   bulkDraft = { qty:{}, cost:{} };
@@ -4685,7 +4686,11 @@ function saveNewLot(){
   const it = S.items.find(i => i.id === l.itemId);
   const prevRem = 0;
   S.lots.push(l);
-  if(it) it.qty = num(it.qty) + (num(l.remaining) - prevRem);
+  if(it){
+    it.qty = num(it.qty) + (num(l.remaining) - prevRem);
+    // Stock on the shelf means you carry it — same promotion a receive does.
+    if(num(it.qty) > 0) it.catalog = false;
+  }
   // Vials arrive sealed and filled, so a lot only consumes what you apply to
   // the outside: one label and one ribbon print each.
   const received = num(l.vials);
