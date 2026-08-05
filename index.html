@@ -333,7 +333,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260805-0505-9cf252";
+const BUILD = "20260805-0522-534e04";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4402,6 +4402,11 @@ function labelJpg(id, kind, stockKey, lotId){
   img.onerror = () => { URL.revokeObjectURL(url); toast("Export failed \u2014 tell Claude which browser you\u2019re on"); };
   img.src = url;
 }
+function xhtmlSafe(html){
+  // A foreignObject is parsed as strict XML, not HTML: void tags MUST self-close
+  // or the whole label fails to render. Browsers forgive <img>; the SVG path does not.
+  return String(html).replace(/<(img|br|hr|input|source|col|area|embed)(\b[^>]*?)\/?>/gi, "<$1$2/>");
+}
 function renderLabelJPG(i, kind, stockKey, lot){
   // 300 dpi = the print head. Pixel-exact for NIIMBOT image import.
   return new Promise((resolve, reject) => {
@@ -4410,7 +4415,7 @@ function renderLabelJPG(i, kind, stockKey, lot){
     const W = Math.round(st.w * PXMM), H = Math.round(st.h * PXMM);
     const cssMM = 96 / 25.4;
     const zoom = PXMM / cssMM;
-    const inner = productLabelHTML(i, kind, stockKey, lot);
+    const inner = xhtmlSafe(productLabelHTML(i, kind, stockKey, lot));
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'">'+
       '<foreignObject width="100%" height="100%">'+
       '<div xmlns="http://www.w3.org/1999/xhtml" style="width:'+st.w+'mm;height:'+st.h+'mm;'+
