@@ -333,7 +333,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260805-0536-02cac0";
+const BUILD = "20260805-2355-d418ff";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -3079,6 +3079,158 @@ function resolveCode(codeRaw){
                      (a.item.name||"").localeCompare(b.item.name||""));
   return {choices:hits};
 }
+/* ---- Data Matrix ECC200 ---------------------------------------------------
+   Reads better than QR on foil and curved vials, and packs the same code into
+   a smaller square. Single data region only (up to 26x26), which covers any
+   product code comfortably. */
+const DM_SIZES = [[10,3,5],[12,5,7],[14,8,10],[16,12,12],[18,18,14],
+                  [20,22,18],[22,30,20],[24,36,24],[26,44,28]];
+let DM_LOG = null, DM_ALOG = null;
+function dmTables(){
+  if(DM_LOG) return;
+  DM_LOG = new Array(256).fill(0); DM_ALOG = new Array(255).fill(0);
+  let p = 1;
+  for(let i = 0; i < 255; i++){
+    DM_ALOG[i] = p; DM_LOG[p] = i;
+    p <<= 1; if(p >= 256) p ^= 0x12D;      // ECC200 field polynomial
+  }
+}
+function dmMul(a, b){ dmTables(); return (a && b) ? DM_ALOG[(DM_LOG[a] + DM_LOG[b]) % 255] : 0; }
+function dmEncodeAscii(text){
+  const out = [], b = [];
+  for(const ch of String(text)) b.push(ch.charCodeAt(0) & 0xFF);
+  let i = 0;
+  while(i < b.length){
+    const c = b[i];
+    if(c >= 48 && c <= 57 && i + 1 < b.length && b[i+1] >= 48 && b[i+1] <= 57){
+      out.push((c - 48) * 10 + (b[i+1] - 48) + 130); i += 2;   // digit pair
+    }else if(c < 128){
+      out.push(c + 1); i += 1;
+    }else{
+      out.push(235); out.push(c - 128 + 1); i += 1;            // upper shift
+    }
+  }
+  return out;
+}
+function dmPad(cw, d){
+  const out = cw.slice();
+  if(out.length < d) out.push(129);                            // first pad
+  while(out.length < d){
+    const pos = out.length + 1;
+    const r = ((149 * pos) % 253) + 1;
+    const v = (129 + r) % 254;
+    out.push(v === 0 ? 254 : v);                               // 253-state randomising
+  }
+  return out.slice(0, d);
+}
+function dmEcc(data, nc){
+  dmTables();
+  const g = new Array(nc + 1).fill(0); g[0] = 1;
+  for(let i = 1; i <= nc; i++){
+    g[i] = g[i-1];
+    for(let j = i - 1; j > 0; j--) g[j] = g[j-1] ^ dmMul(g[j], DM_ALOG[i]);
+    g[0] = dmMul(g[0], DM_ALOG[i]);
+  }
+  const ecc = new Array(nc).fill(0);
+  for(const d of data){
+    const k = ecc[nc-1] ^ d;
+    for(let j = nc - 1; j > 0; j--) ecc[j] = ecc[j-1] ^ dmMul(g[j], k);
+    ecc[0] = dmMul(g[0], k);
+  }
+  return ecc.reverse();
+}
+function dmPlace(code, size){
+  const nrow = size - 2, ncol = size - 2;
+  const arr = [];
+  for(let r = 0; r < nrow; r++) arr.push(new Array(ncol).fill(null));
+  const mod = (r, c, ch, bit) => {
+    if(r < 0){ r += nrow; c += 4 - ((nrow + 4) % 8); }
+    if(c < 0){ c += ncol; r += 4 - ((ncol + 4) % 8); }
+    arr[r][c] = [ch, bit];
+  };
+  const utah = (r, c, ch) => {
+    mod(r-2,c-2,ch,1); mod(r-2,c-1,ch,2); mod(r-1,c-2,ch,3); mod(r-1,c-1,ch,4);
+    mod(r-1,c,ch,5);   mod(r,c-2,ch,6);   mod(r,c-1,ch,7);   mod(r,c,ch,8);
+  };
+  const c1 = ch => { mod(nrow-1,0,ch,1); mod(nrow-1,1,ch,2); mod(nrow-1,2,ch,3);
+                     mod(0,ncol-2,ch,4); mod(0,ncol-1,ch,5); mod(1,ncol-1,ch,6);
+                     mod(2,ncol-1,ch,7); mod(3,ncol-1,ch,8); };
+  const c2 = ch => { mod(nrow-3,0,ch,1); mod(nrow-2,0,ch,2); mod(nrow-1,0,ch,3);
+                     mod(0,ncol-4,ch,4); mod(0,ncol-3,ch,5); mod(0,ncol-2,ch,6);
+                     mod(0,ncol-1,ch,7); mod(1,ncol-1,ch,8); };
+  const c3 = ch => { mod(nrow-3,0,ch,1); mod(nrow-2,0,ch,2); mod(nrow-1,0,ch,3);
+                     mod(0,ncol-2,ch,4); mod(0,ncol-1,ch,5); mod(1,ncol-1,ch,6);
+                     mod(2,ncol-1,ch,7); mod(3,ncol-1,ch,8); };
+  const c4 = ch => { mod(nrow-1,0,ch,1); mod(nrow-1,ncol-1,ch,2); mod(0,ncol-3,ch,3);
+                     mod(0,ncol-2,ch,4); mod(0,ncol-1,ch,5); mod(1,ncol-3,ch,6);
+                     mod(1,ncol-2,ch,7); mod(1,ncol-1,ch,8); };
+  let ch = 1, r = 4, c = 0;
+  do{
+    if(r === nrow && c === 0) c1(ch++);
+    if(r === nrow - 2 && c === 0 && (ncol % 4)) c2(ch++);
+    if(r === nrow - 2 && c === 0 && (ncol % 8) === 4) c3(ch++);
+    if(r === nrow + 4 && c === 2 && (ncol % 8) === 0) c4(ch++);
+    do{                                                  // upward diagonal
+      if(r < nrow && c >= 0 && arr[r][c] === null) utah(r, c, ch++);
+      r -= 2; c += 2;
+    }while(r >= 0 && c < ncol);
+    r += 1; c += 3;
+    do{                                                  // downward diagonal
+      if(r >= 0 && c < ncol && arr[r][c] === null) utah(r, c, ch++);
+      r += 2; c -= 2;
+    }while(r < nrow && c >= 0);
+    r += 3; c += 1;
+  }while(r < nrow || c < ncol);
+  if(arr[nrow-1][ncol-1] === null){                      // unfilled corner: dark diagonal
+    arr[nrow-1][ncol-1] = ["F", 1];
+    arr[nrow-2][ncol-2] = ["F", 1];
+  }
+  return arr;
+}
+function dmMatrix(text){
+  const cw = dmEncodeAscii(text);
+  let spec = null;
+  for(const s of DM_SIZES){ if(cw.length <= s[1]){ spec = s; break; } }
+  if(!spec) return null;                                 // too long for one region
+  const size = spec[0];
+  const data = dmPad(cw, spec[1]);
+  const code = data.concat(dmEcc(data, spec[2]));
+  const arr = dmPlace(code, size);
+  const m = [];
+  for(let y = 0; y < size; y++) m.push(new Array(size).fill(0));
+  for(let i = 0; i < size; i++){
+    m[i][0] = 1;                       // solid left
+    m[size-1][i] = 1;                  // solid bottom
+    if(i % 2 === 0) m[0][i] = 1;       // top clock track
+    if(i % 2 === 1) m[i][size-1] = 1;  // right clock track
+  }
+  for(let r = 0; r < size - 2; r++){
+    for(let c = 0; c < size - 2; c++){
+      const cell = arr[r][c];
+      if(!cell) continue;
+      m[r+1][c+1] = cell[0] === "F" ? 1 : ((code[cell[0]-1] >> (8 - cell[1])) & 1);
+    }
+  }
+  return m;
+}
+function dmSvg(text){
+  try{
+    const m = dmMatrix(String(text));
+    if(!m) return null;
+    const n = m.length, q = 1, span = n + q*2;            // one module quiet zone
+    let path = "";
+    for(let y = 0; y < n; y++)
+      for(let x = 0; x < n; x++)
+        if(m[y][x]) path += "M" + (x+q) + " " + (y+q) + "h1v1h-1z";
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+span+' '+span+'" '+
+      'shape-rendering="crispEdges"><rect width="'+span+'" height="'+span+'" fill="#fff"/>'+
+      '<path d="'+path+'" fill="#000"/></svg>';
+  }catch(e){ return null; }
+}
+function sym2d(text){
+  // Data Matrix by default: smaller, and it reads on holographic stock where QR struggles.
+  return (S.settings.sym2d === "qr") ? qrSvg(text) : (dmSvg(text) || qrSvg(text));
+}
 function qrSvg(text){
   try{
     if(typeof qrcode !== "function") return null;
@@ -4180,7 +4332,7 @@ function wrapVialHTML(i, st, lotPick){
 
   const lot = lotPick || S.lots.filter(l => l.itemId === i.id && num(l.remaining) > 0)[0];
   const code = (i.code || "") + "-01";
-  const qr = qrSvg(code);
+  const qr = sym2d(code);
   const tagline = S.settings.tagline === undefined ? "IN THE LAB\nCOMPOUNDS" : S.settings.tagline;
   // Purity comes off the lot's COA, never a fixed number baked into the design.
   const pv = lot ? (lot.testPurity || lot.purity) : "";
@@ -4294,7 +4446,7 @@ function productLabelHTML(i, kind, stockKey, lotPick){
   if(kind === "vial"){
     codeVal = base + "-01";
     const sq = Math.min(inner, st.w * 0.38);
-    const qr = qrSvg(codeVal);
+    const qr = sym2d(codeVal);
     right = '<div style="width:'+sq+'mm;height:'+sq+'mm;flex:none">'+
       (qr ? qr.replace("<svg ", '<svg style="width:100%;height:100%;display:block" ') : code128svg(codeVal).replace("<svg ", '<svg style="width:100%;height:100%" '))+'</div>';
   }else if(kind === "kit"){
@@ -4323,6 +4475,11 @@ function productLabelHTML(i, kind, stockKey, lotPick){
       '<div style="font-size:'+(st.h*0.1)+'mm;line-height:1.25;margin-top:.4mm">'+sub+'</div>'+
       '<div style="font-size:'+(st.h*0.095)+'mm;font-family:monospace;letter-spacing:.05em;margin-top:.4mm">'+esc(codeVal)+'</div>'+
     '</div>'+right+'</div>';
+}
+function setSym2d(v, id, kind, stockKey){
+  S.settings.sym2d = v; save();
+  labelSheet(id, kind, stockKey);
+  toast(v === "qr" ? "QR codes on labels" : "Data Matrix on labels");
 }
 function labelSheet(id, kind, stockKey){
   const i = S.items.find(x => x.id === id); if(!i) return;
@@ -4377,6 +4534,9 @@ function labelSheet(id, kind, stockKey){
     '<button class="btn full" style="margin-top:8px" onclick="exportLabelJPG(\''+id+'\',\''+kind+'\',\''+stockKey+'\')">Save JPG for NIIMBOT</button>'+
     '<button class="btn full" style="margin-bottom:8px" onclick="exportAllLabels(\''+kind+'\',\''+stockKey+'\')">Save ALL stocked \u00b7 '+(kind==="vial"?"Vial":kind==="kit"?"10-kit":kind==="shelf"?"Shelf":"Card")+' labels (ZIP)</button>'+
     '<button class="btn full" style="margin-bottom:8px" onclick="exportAllLabels([\'vial\',\'kit\'],\''+stockKey+'\')">Save bin set \u00b7 singles + kits, every stocked product (ZIP)</button>'+
+    '<div class="modebar" style="grid-template-columns:1fr 1fr;margin-bottom:8px">'+
+      '<button aria-pressed="'+(S.settings.sym2d!=="qr"?"true":"false")+'" onclick="setSym2d(\'dm\',\''+id+'\',\''+kind+'\',\''+stockKey+'\')">Data Matrix</button>'+
+      '<button aria-pressed="'+(S.settings.sym2d==="qr"?"true":"false")+'" onclick="setSym2d(\'qr\',\''+id+'\',\''+kind+'\',\''+stockKey+'\')">QR</button></div>'+
     '<p class="hint" style="margin-top:10px">Print needs a system printer. JPG saves this exact label at true size (300 dpi) \u2014 import it in the NIIMBOT app on '+st.w+'\u00d7'+st.h+' mm stock, set copies there, print.</p>');
 }
 function labelJpg(id, kind, stockKey, lotId){
@@ -4820,6 +4980,10 @@ function openOrder(id){
       ? '<button class="btn full" style="margin-bottom:8px" onclick="reopenOrder(\''+o.id+'\')">Completed \u2713 \u00b7 tap to reopen</button>'
       : '<button class="btn full" style="margin-bottom:8px" onclick="completeOrder(\''+o.id+'\')">Complete &amp; close</button>')+
     '<button class="btn full" style="margin-bottom:8px" onclick="pickTicketSheet(\''+o.id+'\')">Pick ticket</button>'+
+    '<button class="btn full" style="margin-bottom:8px" onclick="sendToBench(\''+o.id+'\')">Send to the bench printer</button>'+
+    (o.labelUrl
+      ? '<a class="btn full" style="margin-bottom:8px;display:block;text-align:center" href="'+esc(o.labelUrl)+'" target="_blank" rel="noopener">Label bought \u2713 \u00b7 open the PDF</a>'
+      : '<button class="btn full" style="margin-bottom:8px" onclick="buyLabel(\''+o.id+'\')">Buy postage \u00b7 cheapest</button>')+
     '<button class="btn full" style="margin-bottom:8px'+(o.noCharge?';border-color:#5A4A28;color:var(--warn)':'')+'" onclick="markNoCharge(\''+o.id+'\')">'+
       (o.noCharge ? 'Giveaway / personal use \u2713 \u00b7 tap to undo' : 'Mark as giveaway / personal use')+'</button>'+
     '<button class="btn pri full" style="margin-bottom:8px" onclick="orderAddSheet(\''+o.id+'\')">Add products</button>'+
@@ -5294,6 +5458,7 @@ async function copyCsv(btn){
 
 /* ============ parcels & carrier rates ============ */
 const BOXES = {
+  "mailer-itl":{name:"Padded mailer 10×6×2.5",l:10,w:6,h:2.5,tare:28},
   "mailer-s":{name:"Padded mailer 9×6×1",l:9,w:6,h:1,tare:28},
   "box-s":{name:"Box 6×4×2",l:6,w:4,h:2,tare:34},
   "box-m":{name:"Box 8×6×4",l:8,w:6,h:4,tare:113},
@@ -5301,8 +5466,140 @@ const BOXES = {
   "custom":{name:"Custom",l:0,w:0,h:0,tare:0}
 };
 const G_PER_OZ = 28.3495;
+function workerBase(){
+  return String(S.settings.rateUrl || S.settings.syncUrl || "").trim().replace(/\/+$/, "");
+}
+async function workerCall(path, body){
+  const base = workerBase();
+  if(!base) throw new Error("Set the Worker URL in carrier setup first");
+  const res = await fetch(base + path, {
+    method:"POST",
+    headers:{"Content-Type":"application/json","X-ITLOps-Key":S.settings.rateKey || ""},
+    body: JSON.stringify(body)
+  });
+  let data = {};
+  try{ data = await res.json(); }catch(e){ throw new Error("HTTP " + res.status); }
+  if(!res.ok || data.error) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+function shipFrom(){
+  // USPS refuses to sell postage without a from-email, so it lives in settings
+  // rather than being remembered at the bench.
+  return {
+    name: S.settings.fromName || "ITL Compounds",
+    street1: S.settings.fromStreet || "",
+    city: S.settings.fromCity || "",
+    state: S.settings.fromState || "",
+    zip: S.settings.fromZip || "",
+    country: "US",
+    phone: S.settings.fromPhone || "",
+    email: S.settings.fromEmail || ""
+  };
+}
+function shipTo(o){
+  const c = S.customers.find(x => x.id === o.customerId);
+  const street = String(o.toAddr || "").split("\n")[0] || "";
+  return {
+    name: o.toName || (c ? c.name : ""),
+    street1: street,
+    city: o.toCity || "",
+    state: o.toState || "",
+    zip: o.toZip || "",
+    country: "US",
+    phone: (c && c.phone) || "",
+    email: (c && c.email) || ""
+  };
+}
+function shipReady(o){
+  const f = shipFrom(), t = shipTo(o);
+  const miss = [];
+  if(!f.street1 || !f.zip) miss.push("your ship-from address");
+  if(!f.email) miss.push("your from-email (USPS requires it)");
+  if(!t.street1 || !t.zip) miss.push("the customer's address");
+  return miss;
+}
+async function buyLabel(oid, prefer){
+  const o = S.orders.find(x => x.id === oid); if(!o) return;
+  const miss = shipReady(o);
+  if(miss.length){ toast("Need " + miss.join(", ")); return; }
+  const p = parcelFor(o);
+  toast("Buying postage\u2026");
+  try{
+    const r = await workerCall("/ship", {
+      action: "buy",
+      prefer: prefer || S.settings.preferCarrier || "cheapest",
+      from: shipFrom(),
+      to: shipTo(o),
+      parcel: {length:p.length, width:p.width, height:p.height, weight_oz:+p.oz.toFixed(2)}
+    });
+    o.labelUrl = r.label_url || "";
+    o.tracking = r.tracking || o.tracking;
+    o.carrier = r.carrier || o.carrier;
+    o.trackingUrl = r.tracking_url || "";
+    o.labelTxn = r.transaction || "";
+    if(r.amount != null) o.shipCost = num(r.amount);
+    if(o.status === "open") o.status = "packed";
+    save(); renderAll(); openOrder(oid);
+    toast("Label bought \u00b7 " + (r.carrier || "") + " " + (r.amount != null ? money(r.amount) : ""));
+  }catch(err){
+    toast("Postage failed: " + err.message);
+  }
+}
+function pickTicketEscpos(o){
+  // 80mm receipt: 48 characters at font A. Bin first, because that is the
+  // order the picker walks the shelves in.
+  const ESC = "\x1B", GS = "\x1D";
+  const c = S.customers.find(x => x.id === o.customerId);
+  const lines = (o.lines || []).slice().map(l => {
+    const it = S.items.find(i => i.id === l.itemId) || {};
+    return {bin:(it.bin || "").toUpperCase(), name: it.name || "item", qty: num(l.qty), code: it.code || ""};
+  }).sort((a, b) => (a.bin || "zz").localeCompare(b.bin || "zz", undefined, {numeric:true}));
+  let out = ESC + "@";                       // reset
+  out += ESC + "a" + "\x01";                 // centre
+  out += ESC + "!" + "\x30" + "PICK TICKET\n";
+  out += ESC + "!" + "\x00";
+  out += (o.ref || "") + "\n";
+  out += (c ? c.name : "Customer") + "\n";
+  out += new Date(o.created || Date.now()).toLocaleDateString() + "\n";
+  out += ESC + "a" + "\x00";                 // left
+  out += "-".repeat(48) + "\n";
+  lines.forEach(l => {
+    out += ESC + "!" + "\x10";               // double height
+    out += (l.bin || "--").padEnd(6) + String(l.qty).padStart(3) + " vial" + (l.qty===1?"":"s") + "\n";
+    out += ESC + "!" + "\x00";
+    out += "  " + l.name.slice(0, 44) + "\n";
+    if(l.code) out += "  " + l.code + "\n";
+    out += "  [ ] picked\n";
+  });
+  out += "-".repeat(48) + "\n";
+  out += "Front bin only - sealed kits stay in back\n";
+  out += "Check every line before sealing\n\n";
+  out += "Picked by ______________  Time ______\n";
+  out += "\n\n\n";
+  out += GS + "V" + "\x00";                  // cut
+  return out;
+}
+async function sendToBench(oid){
+  const o = S.orders.find(x => x.id === oid); if(!o) return;
+  if(!(o.lines || []).length){ toast("Nothing on this order to pick"); return; }
+  let sent = 0;
+  try{
+    await workerCall("/print", {job:{kind:"escpos", printer:"bench",
+      note:"pick " + (o.ref||""), data: pickTicketEscpos(o)}});
+    sent++;
+    if(o.labelUrl){
+      await workerCall("/print", {job:{kind:"pdfurl", printer:"label",
+        note:"label " + (o.ref||""), data:o.labelUrl}});
+      sent++;
+    }
+    toast(sent === 2 ? "Pick ticket and label queued for the bench"
+                     : "Pick ticket queued \u00b7 no label bought yet");
+  }catch(err){
+    toast("Queue failed: " + err.message);
+  }
+}
 function parcelFor(o){
-  const b = BOXES[o.boxId] || BOXES["box-s"];
+  const b = BOXES[o.boxId] || BOXES["mailer-itl"];
   const box = o.boxId === "custom"
     ? {l:num(o.boxL), w:num(o.boxW), h:num(o.boxH), tare:num(o.boxTare)}
     : {l:b.l, w:b.w, h:b.h, tare:b.tare};
@@ -5380,6 +5677,10 @@ function carrierSetupSheet(){
     '<div class="field"><label>Rate endpoint URL</label><input id="cs_url" value="'+esc(S.settings.rateUrl||"")+'" placeholder="https://rates.yourdomain.workers.dev"></div>'+
     '<div class="field"><label>Shared key</label><input id="cs_key" value="'+esc(S.settings.rateKey||"")+'" placeholder="A password you set on the endpoint"></div>'+
     '<div class="eyebrow" style="margin:14px 0 6px">Ship-from address</div>'+
+    '<div class="field"><label>Ship from \u2014 business name</label><input id="cs_name" value="'+esc(S.settings.fromName||"")+'" placeholder="ITL Compounds"></div>'+
+    '<div class="field"><label>Street</label><input id="cs_street" value="'+esc(S.settings.fromStreet||"")+'"></div>'+
+    '<div class="grid2"><div class="field"><label>Phone</label><input id="cs_phone" value="'+esc(S.settings.fromPhone||"")+'" inputmode="tel"></div>'+
+    '<div class="field"><label>Email \u2014 USPS requires it</label><input id="cs_email" type="email" value="'+esc(S.settings.fromEmail||"")+'"></div></div>'+
     '<div class="grid3"><div class="field"><label>City</label><input id="cs_city" value="'+esc(S.settings.fromCity||"")+'"></div>'+
     '<div class="field"><label>State</label><input id="cs_state" value="'+esc(S.settings.fromState||"")+'" maxlength="2"></div>'+
     '<div class="field"><label>ZIP</label><input id="cs_zip" value="'+esc(S.settings.fromZip||"")+'" inputmode="numeric"></div></div>'+
@@ -5398,6 +5699,11 @@ function carrierSetupSheet(){
   }));
 }
 function saveCarrierSetup(){
+  S.settings.fromName = $("cs_name") ? $("cs_name").value.trim() : S.settings.fromName;
+  S.settings.fromStreet = $("cs_street") ? $("cs_street").value.trim() : S.settings.fromStreet;
+  S.settings.fromPhone = $("cs_phone") ? $("cs_phone").value.trim() : S.settings.fromPhone;
+  S.settings.fromEmail = $("cs_email") ? $("cs_email").value.trim() : S.settings.fromEmail;
+
   S.settings.rateUrl = $("cs_url").value.trim();
   S.settings.rateKey = $("cs_key").value.trim();
   S.settings.fromCity = $("cs_city").value.trim();
