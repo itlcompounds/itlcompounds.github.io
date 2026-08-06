@@ -843,9 +843,9 @@ async function stationGet(path){
   if(!r.ok) throw new Error("HTTP " + r.status);
   return r.json();
 }
+const DEFAULT_SYNC = "https://itl-ops-rates.itlcompounds.workers.dev";
 function syncURL(){
-  const u = (S.settings.syncUrl||"").trim();
-  if(!u) return "";
+  const u = (S.settings.syncUrl||"").trim() || DEFAULT_SYNC;
   return u.replace(/\/+$/,"") + "/sync";
 }
 function syncHeaders(){
@@ -2516,6 +2516,7 @@ function beginReview(supId, rows){
   if(!rows.length){ toast("Nothing looked like a price line"); return; }
   const maxNums = rows.reduce((a,r) => Math.max(a, r.nums.length), 1);
   rows.forEach(r => { const it = matchItem(r.name); r.itemId = it ? it.id : ""; });
+  rows.forEach(r => { if(!r.itemId) suggestForRow(r); });
   const isCat = rows.some(r => r.catalog);
   review = {supId, rows, col: isCat ? 0 : maxNums-1, maxNums, mode: review.mode || "merge", filter:"all"};
   reviewSheet();
@@ -2528,6 +2529,7 @@ function renameRow(ix){
   r.name = (r.dose ? clean + " " + r.dose + (r.unit||"") : clean);
   const it = matchItem(r.name) || matchItem(clean);
   r.itemId = it ? it.id : "";
+  if(!r.itemId) suggestForRow(r); else r.suggestId = "";
   r.touched = true;
   saveReview();
   // Update only what changed. No rebuild, so focus and scroll stay put.
@@ -2647,6 +2649,53 @@ function composeName(base, dose, unit){
   return base + " " + dose + (unit||"mg");
 }
 function createFromReview(){
+  // The ask. Rows resembling an existing product stop here instead of
+  // silently becoming duplicates — the root cause of two repair sessions.
+  const flagged = review.rows.filter(r =>
+    r.use && !r.itemId && !r.diluent && r.suggestId &&
+    String(r.baseName||r.name||"").trim());
+  if(flagged.length){ confirmCreateSheet(); return; }
+  reallyCreateFromReview();
+}
+function confirmCreateSheet(){
+  const flagged = review.rows.map((r,ix) => [r,ix]).filter(([r]) =>
+    r.use && !r.itemId && !r.diluent && r.suggestId &&
+    String(r.baseName||r.name||"").trim());
+  if(!flagged.length){ reallyCreateFromReview(); return; }
+  flagged.sort((a,b) => (b[0].suggestScore||0) - (a[0].suggestScore||0));
+  sheet('<h2>'+flagged.length+' of these look like products you already have</h2>'+
+    '<p class="hint" style="margin-top:-6px">Same strength, similar wording. <b>Link</b> puts the vendor\u2019s price on your existing product; <b>New</b> creates a separate one anyway.</p>'+
+    flagged.map(([r,ix]) => {
+      const shown = review.withDose === false ? (r.baseName||r.name)
+                  : composeName(r.baseName||r.name, r.dose, r.unit);
+      return '<div class="row" style="align-items:flex-start">'+
+        '<span class="nm" style="min-width:0"><b>'+esc(shown)+'</b>'+
+          '<small>on their list \u2014 looks like your <b>'+esc(r.suggestName)+'</b> ('+
+          Math.round((r.suggestScore||0)*100)+'% name match)</small></span>'+
+        '<span class="rt" style="display:flex;gap:6px">'+
+          '<button class="pill brand" onclick="linkSuggested('+ix+')">Link</button>'+
+          '<button class="pill" onclick="dropSuggestion('+ix+')">New</button></span></div>';
+    }).join("")+
+    '<div class="sheetact"><button class="btn" onclick="linkAllSuggested()">Link all '+flagged.length+'</button>'+
+    '<button class="btn pri" onclick="reallyCreateFromReview()">Create the rest as new</button></div>');
+}
+function linkSuggested(ix){
+  const r = review.rows[ix]; if(!r) return;
+  r.itemId = r.suggestId; r.suggestId = ""; r.touched = true;
+  saveReview(); confirmCreateSheet();
+}
+function dropSuggestion(ix){
+  const r = review.rows[ix]; if(!r) return;
+  r.suggestId = ""; r.touched = true;
+  saveReview(); confirmCreateSheet();
+}
+function linkAllSuggested(){
+  review.rows.forEach(r => {
+    if(r.use && !r.itemId && !r.diluent && r.suggestId){ r.itemId = r.suggestId; r.suggestId = ""; r.touched = true; }
+  });
+  saveReview(); reallyCreateFromReview();
+}
+function reallyCreateFromReview(){
   let made = 0;
   review.rows.filter(r => r.use && !r.itemId && !r.diluent && String(r.baseName||r.name||"").trim()).forEach(r => {
     const raw = (r.baseName || r.name);
@@ -2710,6 +2759,84 @@ function commitReview(){
     + (review.mode === "replace" && before ? " · " + before + " replaced" : ""));
 }
 function normName(s){ return String(s||"").toUpperCase().replace(/[^A-Z0-9]/g,""); }
+/* ── import guard ────────────────────────────────────────────────────────
+ * matchItem() only catches exact normalized names, so a vendor writing
+ * "Ipamorelin + CJC-1295" for our "CJC-1295 no DAC + Ipamorelin" minted a
+ * duplicate — twice, each costing a data-repair session. The guard scores
+ * unmatched rows against the catalogue on word overlap, with the strength
+ * compared separately in canonical units (1.5g == 1500mg), and asks before
+ * creating anything that resembles a product we already have.
+ * A false suggestion costs one tap on "New"; a missed one costs a repair
+ * session — so the matcher is deliberately generous and the sheet decides.
+ */
+function doseCanon(dose, unit){
+  const d = parseFloat(dose); if(!isFinite(d) || d <= 0) return null;
+  const u = String(unit||"mg").toLowerCase().replace("µ","u");
+  if(u === "g")  return {v:d*1000, u:"mg"};
+  if(u === "mcg" || u === "ug") return {v:d/1000, u:"mg"};
+  if(u === "iu" || u === "ml") return {v:d, u:u};
+  return {v:d, u:"mg"};
+}
+function doseFromText(s){
+  const m = [...String(s||"").matchAll(/(\d+(?:\.\d+)?)\s*(mg|mcg|ug|iu|ml|g)\b/gi)];
+  return m.length ? doseCanon(m[m.length-1][1], m[m.length-1][2]) : null;
+}
+function nameTokens(s){
+  return new Set(String(s||"").toUpperCase()
+    .replace(/(\d+(?:\.\d+)?)\s*(MG|MCG|UG|IU|ML|G)\b/g, " ")  // strength scored separately
+    .replace(/[^A-Z0-9]+/g, " ")
+    .split(" ").filter(Boolean));
+}
+// A bare digit left after the strength is stripped is a variant number, not
+// evidence of similarity: "Melanotan 1" and "Melanotan 2" share every word and
+// differ only there. So digits DISQUALIFY when they conflict, and are excluded
+// from the score otherwise — counting them sank "Retatrutide (GLP-3)".
+function splitTokens(s){
+  const all = nameTokens(s), words = new Set(), digits = new Set();
+  all.forEach(t => (/^\d+$/.test(t) ? digits : words).add(t));
+  // "CJC-1295 DAC" and "CJC-1295 NO DAC" share every other word and are
+  // different products — linking them would put the wrong peptide on an
+  // order. Negation is therefore a hard discriminator, not a scored word.
+  const neg = words.has("NO") || words.has("WITHOUT") || words.has("FREE");
+  return {words, digits, neg};
+}
+function itemDose(i){ return doseFromText(i.name) || doseCanon(i.dose, "mg"); }
+function fuzzyItem(rowName, rowDose){
+  const r = splitTokens(rowName);
+  if(!r.words.size) return null;
+  let best = null, bestScore = 0;
+  S.items.forEach(i => {
+    const idose = itemDose(i);
+    const doseOK = (!rowDose && !idose) ||
+      (rowDose && idose && rowDose.u === idose.u &&
+       Math.abs(rowDose.v - idose.v) <= Math.max(rowDose.v, idose.v) * 0.001);
+    if(!doseOK) return;
+    const t = splitTokens(i.name);
+    if(!t.words.size) return;
+    if(r.neg !== t.neg) return;   // "DAC" is not "NO DAC"
+    // Variant numbers on both sides must agree, or it is a different product.
+    if(r.digits.size && t.digits.size){
+      let same = false;
+      r.digits.forEach(d => { if(t.digits.has(d)) same = true; });
+      if(!same) return;
+    }
+    let hit = 0; r.words.forEach(w => { if(t.words.has(w)) hit++; });
+    // Dice, not overlap coefficient: with min() a SUBSET scores 100%, so a
+    // vendor's "Ipamorelin + CJC-1295 no DAC" tied with our plain
+    // "CJC-1295 no DAC" and won on iteration order — suggesting the wrong
+    // product. Dice penalises leftover words on both sides, so the fuller
+    // "CJC-1295 no DAC + Ipamorelin" wins outright.
+    const sc = (2 * hit) / (r.words.size + t.words.size);
+    if(sc > bestScore){ bestScore = sc; best = i; }
+  });
+  return bestScore >= 0.6 ? {item: best, score: bestScore} : null;
+}
+function suggestForRow(r){
+  const d = doseCanon(r.dose, r.unit) || doseFromText(r.name);
+  const f = fuzzyItem(r.baseName || r.name, d);
+  if(f){ r.suggestId = f.item.id; r.suggestName = f.item.name; r.suggestScore = f.score; }
+  else { r.suggestId = ""; }
+}
 function matchItem(name){
   const n = normName(name);
   if(!n) return null;
@@ -2806,6 +2933,32 @@ function importPasted(supId){
   if(!txt.trim()){ toast("Paste the list first"); return; }
   beginReview(supId, looksCatalog(txt) ? parseCatalog(txt) : parseFlexible(txt.split(/\r?\n/)));
 }
+// Holds the typed values while the duplicate-check sheet is up, because
+// opening that sheet destroys the input fields they came from.
+let pendingCreate = {};
+function linkPendingPrice(){
+  const p = pendingCreate; pendingCreate = {};
+  const sup = S.suppliers.find(x => x.id === p.supId); if(!sup) return;
+  const it = S.items.find(i => i.id === p.linkTo); if(!it) return;
+  sup.prices = sup.prices || [];
+  if(p.ix < 0) sup.prices.push({name:p.nm, cat:p.cat, kitPrice:p.kp, itemId:it.id, perKit:10});
+  else { const row = sup.prices[p.ix]; if(row){ row.name = p.nm; row.cat = p.cat; row.kitPrice = p.kp; row.itemId = it.id; } }
+  save(); priceSheet(p.supId);
+  toast("Linked to " + it.name + " \u00b7 " + it.code);
+}
+function createPendingAnyway(){
+  const p = pendingCreate;
+  pendingCreate = {skipGuard: true};
+  // Re-open the edit sheet (the confirm sheet destroyed its fields), restore
+  // the typed values, then re-enter with the guard off for this one pass.
+  sheetLocked = false;
+  editPrice(p.supId, p.ix);
+  setTimeout(() => {
+    const n = $("ep_name"), c = $("ep_cat"), k = $("ep_price");
+    if(n) n.value = p.nm; if(c) c.value = p.cat; if(k) k.value = p.kp;
+    createProductForPrice(p.supId, p.ix);
+  }, 0);
+}
 function createProductForPrice(supId, ix){
   const sup = S.suppliers.find(x => x.id === supId); if(!sup) return;
   const nm = ($("ep_name").value || "").trim();
@@ -2816,6 +2969,22 @@ function createProductForPrice(supId, ix){
   const unit = m ? m[2].toLowerCase() : "mg";
   let it = S.items.find(i => normName(i.name) === normName(nm) && String(i.dose||"") === String(dose||""));
   const existed = !!it;
+  if(!it && !pendingCreate.skipGuard){
+    // Same guard as the bulk path: a near-match pauses creation with a choice.
+    const f = fuzzyItem(nm, doseCanon(dose, unit) || doseFromText(nm));
+    if(f){
+      pendingCreate = {supId, ix, nm, dose, unit, linkTo: f.item.id,
+                       cat: $("ep_cat").value.trim(), kp: num($("ep_price").value)};
+      sheet('<h2>Looks like a product you already have</h2>'+
+        '<p class="hint" style="margin-top:-6px"><b>'+esc(nm)+'</b> resembles your <b>'+esc(f.item.name)+
+        '</b> ('+Math.round(f.score*100)+'% name match, same strength). Link the price to it, or create a duplicate on purpose?</p>'+
+        '<button class="btn pri full" style="margin-bottom:8px" onclick="linkPendingPrice()">Link to '+esc(f.item.name)+'</button>'+
+        '<div class="sheetact"><button class="btn" onclick="pendingCreate={};priceSheet(\''+supId+'\')">Cancel</button>'+
+        '<button class="btn warn" onclick="createPendingAnyway()">Create anyway</button></div>');
+      return;
+    }
+  }
+  if(pendingCreate.skipGuard) pendingCreate = {};
   if(!it){
     it = {id:uid("i"), name:nm, dose, unit, code:uniqueCodeFor(nm, dose, null),
           bin:"", price:0, qty:0, reorder:0, orderQty:0, supplierId:supId,
