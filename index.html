@@ -333,7 +333,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260806-0230-45c5e4";
+const BUILD = "20260807-0507-5c4a7f";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -5715,39 +5715,91 @@ async function buyLabel(oid, prefer){
   }
 }
 function pickTicketEscpos(o){
-  // 80mm receipt: 48 characters at font A. Bin first, because that is the
-  // order the picker walks the shelves in.
+  // 80mm receipt, 48 characters at font A. This mirrors pickTicketHTML() so the
+  // thermal ticket and the letter-size one read the same: same header, same
+  // BIN / PRODUCT / VIALS / tick table, same BEFORE SEALING block. Drawn with
+  // ASCII rules rather than box-drawing characters, because the codepage a
+  // given POS80 boots with is not something we can rely on.
   const ESC = "\x1B", GS = "\x1D";
+  const W = 48, BW = 5, PW = 30, QW = 5, CW = 3;   // 5 borders + 43 content = 48
+  const pad  = (s, w) => { s = String(s == null ? "" : s).slice(0, w); return s + " ".repeat(w - s.length); };
+  const mid  = (s, w) => { s = String(s == null ? "" : s).slice(0, w);
+                           const l = Math.floor((w - s.length) / 2);
+                           return " ".repeat(l) + s + " ".repeat(w - s.length - l); };
+  const sep  = "+" + "-".repeat(BW) + "+" + "-".repeat(PW) + "+" + "-".repeat(QW) + "+" + "-".repeat(CW) + "+\n";
+  const row  = (b, p, q, c) => "|" + mid(b, BW) + "|" + pad(" " + p, PW) + "|" + mid(q, QW) + "|" + mid(c, CW) + "|\n";
+  const wrap = (s, w) => { const out = []; s = String(s || "").trim();
+                           while(s.length > w){ let cut = s.lastIndexOf(" ", w);
+                                                if(cut <= 0) cut = w;
+                                                out.push(s.slice(0, cut)); s = s.slice(cut).trim(); }
+                           out.push(s); return out; };
+
   const c = S.customers.find(x => x.id === o.customerId);
-  const lines = (o.lines || []).slice().map(l => {
+  const lines = (o.lines || []).map(l => {
     const it = S.items.find(i => i.id === l.itemId) || {};
     return {bin:(it.bin || "").toUpperCase(), name: it.name || "item", qty: num(l.qty), code: it.code || ""};
   }).sort((a, b) => (a.bin || "zz").localeCompare(b.bin || "zz", undefined, {numeric:true}));
-  let out = ESC + "@";                       // reset
-  out += ESC + "a" + "\x01";                 // centre
-  out += ESC + "!" + "\x30" + "PICK TICKET\n";
+  const total = lines.reduce((n, l) => n + l.qty, 0);
+
+  let out = ESC + "@";                              // reset
+
+  // Header — matches the 3px rule under the HTML title.
+  out += ESC + "a" + "\x01";                        // centre
+  out += ESC + "!" + "\x38" + "PICK TICKET\n";      // double width + height, bold
   out += ESC + "!" + "\x00";
   out += (o.ref || "") + "\n";
-  out += (c ? c.name : "Customer") + "\n";
   out += new Date(o.created || Date.now()).toLocaleDateString() + "\n";
-  out += ESC + "a" + "\x00";                 // left
-  out += "-".repeat(48) + "\n";
+  out += ESC + "a" + "\x00";                        // left
+  out += "=".repeat(W) + "\n";
+
+  out += ESC + "!" + "\x10";                        // double height
+  out += (c ? c.name : "Customer").slice(0, 24) + "\n";
+  out += ESC + "!" + "\x00";
+  out += lines.length + " product" + (lines.length === 1 ? "" : "s") +
+         " / " + total + " vial" + (total === 1 ? "" : "s") + "\n";
+  out += "walk the bins top to bottom\n\n";
+
+  // The table.
+  out += sep;
+  out += row("BIN", "PRODUCT", "VIALS", "X");
+  out += sep;
   lines.forEach(l => {
-    out += ESC + "!" + "\x10";               // double height
-    out += (l.bin || "--").padEnd(6) + String(l.qty).padStart(3) + " vial" + (l.qty===1?"":"s") + "\n";
+    const nm = wrap(l.name, PW - 1);
+    // First line carries bin and qty at double height, as in the HTML.
+    out += ESC + "!" + "\x10";
+    out += row(l.bin || "--", nm[0], String(l.qty), "");
     out += ESC + "!" + "\x00";
-    out += "  " + l.name.slice(0, 44) + "\n";
-    if(l.code) out += "  " + l.code + "\n";
-    out += "  [ ] picked\n";
+    for(let i = 1; i < nm.length; i++) out += row("", nm[i], "", "");
+    if(l.code) out += row("", l.code, "", "");
+    out += sep;
   });
-  out += "-".repeat(48) + "\n";
-  out += "Front bin only - sealed kits stay in back\n";
-  out += "Check every line before sealing\n\n";
-  out += "Picked by ______________  Time ______\n";
-  out += "\n\n\n";
-  out += GS + "V" + "\x00";                  // cut
+
+  // BEFORE SEALING block — the boxed checklist from the HTML ticket.
+  out += "\n";
+  out += "+" + "-".repeat(W - 2) + "+\n";
+  out += "|" + pad(" BEFORE SEALING", W - 2) + "|\n";
+  [ "Every line ticked, vial count matches",
+    "Vials from the FRONT bin only",
+    "  (sealed kits stay in the back)",
+    "Wrapped, padded, nothing loose",
+    "Ship label outside, this ticket left out" ].forEach(t => {
+    const first = t.startsWith("  ");
+    out += "|" + pad(first ? "     " + t.trim() : " [ ] " + t, W - 2) + "|\n";
+  });
+  out += "+" + "-".repeat(W - 2) + "+\n";
+
+  out += "\n";
+  out += "Picked by ____________________\n\n";
+  out += "Time ________________________\n";
+  // The cutter sits ~15mm downstream of the printhead, so whatever prints last
+  // gets guillotined before it clears. ESC d feeds a definite number of lines,
+  // which is more reliable than padding with newlines.
+  out += "\n\n";
+  out += ESC + "d" + "\x06";
+  out += GS + "V" + "\x00";                         // cut
   return out;
 }
+
 async function sendToBench(oid){
   const o = S.orders.find(x => x.id === oid); if(!o) return;
   if(!(o.lines || []).length){ toast("Nothing on this order to pick"); return; }
