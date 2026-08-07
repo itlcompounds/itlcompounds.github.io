@@ -333,7 +333,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260807-0507-5c4a7f";
+const BUILD = "20260807-0635-3ebe3b";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1038,9 +1038,9 @@ function syncSheet(){
     '<p class="hint" style="margin-top:-2px">Points at the same Worker as your carrier rates. Your data lives there, so a phone in a car and a laptop at the bench see one shared copy.</p>'+
     '<div class="field"><label>Worker URL</label><input id="sy_url" value="'+esc(S.settings.syncUrl||S.settings.rateUrl||"")+'" placeholder="https://rates.yourdomain.workers.dev"></div>'+
     '<div class="field"><label>Shared key</label><input id="sy_key" value="'+esc(S.settings.rateKey||"")+'"></div>'+
-    '<div class="field"><label>Bench station — scale &amp; printer (optional)</label>'+
-      '<input id="sy_st" value="'+esc(S.settings.stationUrl||"")+'" placeholder="http://itlops.local:8080"></div>'+
-    '<p class="hint" style="margin-top:-4px">Leave the Worker as the sync address. Data never depends on the Pi being awake.</p>'+
+    '<div class="field"><label>Bench station — scale (optional)</label>'+
+      '<input id="sy_st" value="'+esc(S.settings.stationUrl||"")+'" placeholder="same as the Worker URL above"></div>'+
+    '<p class="hint" style="margin-top:-4px">Put the <b>Worker</b> address here too. The bench Pi pushes scale readings up to it, so a phone reads the scale from anywhere. A LAN address like http://itlops.local:8080 only works from a browser on the same network, and not at all from this page, which is HTTPS.</p>'+
     (stationBlocked()
       ? '<div class="astrip" style="border:1px solid #4A2C29;border-radius:4px;margin-bottom:10px"><span class="t">'+
         'This page is HTTPS and the station address is HTTP — the browser will block every call to it. '+
@@ -5855,7 +5855,16 @@ async function fetchRates(oid){
         carriers: activeCarriers()
       })
     });
-    if(!res.ok) throw new Error("HTTP " + res.status);
+    if(!res.ok){
+      // A 400 here means the endpoint answered and told us what was wrong.
+      // Blaming CORS for that sent a real debugging session down the wrong
+      // path, so surface whatever the server actually said.
+      let detail = "";
+      try{ const j = await res.json(); detail = j.error || ""; }catch(e){}
+      const err = new Error("HTTP " + res.status + (detail ? " — " + detail : ""));
+      err.answered = true;
+      throw err;
+    }
     const data = await res.json();
     const rates = (data.rates||[]).slice().sort((a,b) => num(a.amount)-num(b.amount));
     if(!rates.length){ box.innerHTML = '<p class="hint">No rates came back. Check the ZIPs and that both carriers are enabled on your proxy.</p>'; return; }
@@ -5868,8 +5877,11 @@ async function fetchRates(oid){
     }).join("");
     window.__rates = rates;
   }catch(e){
-    box.innerHTML = '<p class="hint" style="color:var(--alert)">Couldn\'t reach the rate proxy ('+esc(e.message)+').<br>'+
-      'Carriers block browser calls, so this must go through your own endpoint — and that endpoint has to return CORS headers.</p>';
+    box.innerHTML = e.answered
+      ? '<p class="hint" style="color:var(--alert)">The rate endpoint refused this request: '+esc(e.message)+'<br>'+
+        'Usually a missing ship-from ZIP in Setup, no ZIP on the order, or no weight yet.</p>'
+      : '<p class="hint" style="color:var(--alert)">Couldn\'t reach the rate proxy ('+esc(e.message)+').<br>'+
+        'Carriers block browser calls, so this must go through your own endpoint — and that endpoint has to return CORS headers.</p>';
   }
 }
 function pickRate(oid, ix){
@@ -6119,7 +6131,9 @@ function scaleSheet(oid){
     '<button class="btn pri full" id="sc_use" style="margin-top:10px" onclick="useScaleWeight()">Use this weight</button>'+
     '<div class="sheetact"><button class="btn" onclick="closeSheet();shipSheet(\''+oid+'\')">Back</button>'+
     '<button class="btn warn" onclick="disconnectScale()">Disconnect</button></div>'+
-    '<p class="hint" style="margin-top:12px">USB and serial scales need Chrome or Edge on a computer — neither API exists on iOS or Android. On a phone, type the weight into the parcel field instead.</p>');
+    '<p class="hint" style="margin-top:12px">'+(st
+      ? 'The bench Pi reads the scale and pushes to the Worker, so this works on a phone anywhere — no USB, no cable. If it says the bench is offline, put the parcel on the scale to wake it; the M10 sleeps when idle.'
+      : 'USB and serial scales need Chrome or Edge on a computer — neither API exists on iOS or Android. Set a Station URL under Sync to read the bench scale from any device instead.')+'</p>');
   if(st) startStationScale();
   renderScale();
 }
