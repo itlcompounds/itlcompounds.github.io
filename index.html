@@ -333,7 +333,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260807-0635-3ebe3b";
+const BUILD = "20260807-0721-775922";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -5867,14 +5867,25 @@ async function fetchRates(oid){
     }
     const data = await res.json();
     const rates = (data.rates||[]).slice().sort((a,b) => num(a.amount)-num(b.amount));
-    if(!rates.length){ box.innerHTML = '<p class="hint">No rates came back. Check the ZIPs and that both carriers are enabled on your proxy.</p>'; return; }
+    // The Worker already reports per-carrier failures in `errors`; this used to
+    // discard them, so "credentials never set" and "carrier quoted nothing"
+    // rendered as the same sentence. Name the carrier and what it said.
+    const errs = data.errors || {};
+    const notes = Object.keys(errs).map(c =>
+      '<p class="hint" style="color:var(--alert);margin:2px 0">'+esc(c.toUpperCase())+' — '+esc(String(errs[c]))+'</p>'
+    ).join("");
+    if(!rates.length){
+      box.innerHTML = notes ||
+        '<p class="hint">No rates came back. Check the ship-from ZIP in Setup and the ZIP on this order.</p>';
+      return;
+    }
     box.innerHTML = rates.map((r,ix) => {
       const chosen = o.service === r.service && o.carrier === r.carrier;
       return '<button class="row'+(chosen?' low':'')+'" style="'+(chosen?'border-left-color:var(--ok)':'')+'" onclick="pickRate(\''+oid+'\','+ix+')">'+
         '<span class="nm"><b>'+esc(r.carrier)+' '+esc(r.service_name||r.service||"")+'</b>'+
         '<small>'+(r.days ? r.days + " day" + (r.days==1?"":"s") : "transit n/a")+(ix===0?' · cheapest':'')+'</small></span>'+
         '<span class="rt"><b style="color:'+(ix===0?'var(--ok)':'var(--frost)')+'">'+money(num(r.amount))+'</b>'+(chosen?'selected':'')+'</span></button>';
-    }).join("");
+    }).join("") + notes;
     window.__rates = rates;
   }catch(e){
     box.innerHTML = e.answered
