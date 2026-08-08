@@ -334,7 +334,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260808-2216-0efe5d";
+const BUILD = "20260808-2248-c55fc8";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -633,12 +633,13 @@ function priceFor(i, tier, packQty, custId){
     const per = num(quoteCost(i.id).per);
     if(per > 0) return Math.round(per * (1 + pct/100) * 100) / 100;
   }
-  if(num(packQty) < 10) return num(i.price);                     // singles: list, either tier
-  return tier === "friends" ? friendsKitPrice(i) : kitPrice(i);
+  if(num(packQty) < 10) return num(i.price);                     // singles: list
+  return kitPrice(i);
 }
 function tierOf(customerId){
-  const c = S.customers.find(x => x.id === customerId);
-  return (c && c.tier === "friends") ? "friends" : "retail";
+  // Tiers are retired — pricing is per-customer markup % or list. "retail"
+  // keeps the ledger's tier field uniform; old "friends" txns stay as history.
+  return "retail";
 }
 function orderTier(o){ return o ? tierOf(o.customerId) : "retail"; }
 function marginPct(cost, price){
@@ -1464,24 +1465,11 @@ function custFields(c){
     '<div class="grid3"><div class="field"><label>City</label><input id="c_city" value="'+esc(c.city||"")+'"></div>'+
     '<div class="field"><label>State</label><input id="c_state" maxlength="2" value="'+esc(c.state||"")+'"></div>'+
     '<div class="field"><label>ZIP</label><input id="c_zip" inputmode="numeric" value="'+esc(c.zip||"")+'"></div></div>'+
-    '<div class="eyebrow" style="margin:12px 0 6px">Price tier</div>'+
-    '<div class="modebar" style="grid-template-columns:1fr 1fr;margin-bottom:10px">'+
-      '<button type="button" id="c_t_r" aria-pressed="'+(c.tier!=="friends")+'" onclick="setCustTier(0)">'+TIERS.retail+'</button>'+
-      '<button type="button" id="c_t_f" aria-pressed="'+(c.tier==="friends")+'" onclick="setCustTier(1)">'+TIERS.friends+'</button></div>'+
     '<div class="field"><label>Markup % over cost \u2014 optional; prices every sale at landed cost + this</label>'+
       '<input id="c_markup" type="number" step="any" inputmode="decimal" value="'+(c.markupPct==null?"":c.markupPct)+'"></div>'+
     '<div class="field"><label>Notes</label><input id="c_note" value="'+esc(c.note||"")+'"></div>';
 }
-let custTierPick = null;
-function setCustTier(f){
-  custTierPick = f ? "friends" : "retail";
-  const r = $("c_t_r"), fr = $("c_t_f");
-  if(r) r.setAttribute("aria-pressed", String(!f));
-  if(fr) fr.setAttribute("aria-pressed", String(!!f));
-}
 function readCust(c){
-  if(custTierPick) c.tier = custTierPick;
-  custTierPick = null;
   c.name = $("c_name").value.trim() || c.name;
   c.phone = $("c_phone").value.trim(); c.email = $("c_email").value.trim();
   c.addr = $("c_addr").value; c.city = $("c_city").value.trim();
@@ -4175,8 +4163,7 @@ function recordSaleSheet(itemId){
     '<p class="hint">'+esc(i.name)+' \u2014 '+num(i.qty)+' on hand. This writes the sale into history at the date you pick, so revenue and margins land in the right month.</p>'+
     '<div class="grid2"><div class="field"><label>Vials sold</label><input id="rs_qty" type="number" inputmode="numeric" min="1" value="1"></div>'+
     '<div class="field"><label>Price per vial</label><input id="rs_price" type="number" step="any" inputmode="decimal" value="'+num(i.price)+'"></div></div>'+
-    '<div class="grid2"><div class="field"><label>Sale date</label><input id="rs_date" type="date" value="'+toDateInput(Date.now())+'"></div>'+
-    '<div class="field"><label>Tier</label><select id="rs_tier"><option value="retail">Everyone else</option><option value="friends">Friends &amp; family</option></select></div></div>'+
+    '<div class="field"><label>Sale date</label><input id="rs_date" type="date" value="'+toDateInput(Date.now())+'"></div>'+
     '<div class="sheetact"><button class="btn" id="rs_cancel">Cancel</button>'+
     '<button class="btn pri" id="rs_save">Record sale</button></div>');
   setTimeout(() => {
@@ -4191,7 +4178,7 @@ function saveRecordSale(itemId){
   const qty = num($("rs_qty").value);
   const price = num($("rs_price").value);
   const ts = fromDateInput($("rs_date").value, Date.now());
-  const tier = $("rs_tier").value;
+  const tier = "retail";
   if(qty <= 0){ toast("Quantity must be at least 1"); return; }
   if(qty > num(i.qty)){ toast("Only "+num(i.qty)+" on hand \u2014 receive stock first, then record the sale"); return; }
   // FIFO across lots, explicit price and timestamp
@@ -4262,14 +4249,11 @@ function openItem(id){
         'No kit price set — the cost formula would sell a kit at '+money(kitFromCost(i)*10)+
         ' when ten singles fetch '+money(num(i.price)*10)+'</span></div>' : '')+
     '<div class="eyebrow" style="margin:12px 0 6px">Kit of 10 — price per vial</div>'+
-    '<div class="grid2"><div class="field"><label>Everyone else</label>'+
+    '<div class="field"><label>Per vial in a kit</label>'+
       '<input id="e_pk" type="number" step="any" value="'+(num(i.priceKit)||"")+'" placeholder="'+kitPrice(i).toFixed(2)+'"></div>'+
-    '<div class="field"><label>'+TIERS.friends+'</label>'+
-      '<input id="e_pf" type="number" step="any" value="'+(num(i.priceFriends)||"")+'" placeholder="'+friendsKitPrice(i).toFixed(2)+'"></div></div>'+
     '<div class="rcells" style="border:1px solid var(--line);border-radius:4px;margin-bottom:8px">'+
       '<div><div class="k">Single</div><div class="v">'+money(num(i.price))+'</div></div>'+
-      '<div><div class="k">Kit of 10</div><div class="v">'+money(kitPrice(i)*10)+'</div></div>'+
-      '<div><div class="k">F&amp;F kit</div><div class="v" style="color:var(--ok)">'+money(friendsKitPrice(i)*10)+'</div></div></div>'+
+      '<div><div class="k">Kit of 10</div><div class="v">'+money(kitPrice(i)*10)+'</div></div></div>'+
     (num(i.price) > 0 ? (() => {
       // Selling a kit means forgoing ten single sales. That gap is the real
       // decision — moving stock faster in exchange for a smaller total.
@@ -4290,11 +4274,11 @@ function openItem(id){
     '<div class="rcells" style="border:1px solid var(--line);border-radius:4px">'+
       '<div><div class="k">Unit cost</div><div class="v">'+money(c)+'</div></div>'+
       '<div><div class="k">Single margin</div><div class="v">'+money(num(i.price)-c)+'</div></div>'+
-      '<div><div class="k">F&amp;F kit margin</div><div class="v" style="color:'+((friendsKitPrice(i)-c)<0?"var(--alert)":"var(--ok)")+'">'+
-        money(friendsKitPrice(i)-c)+'</div></div></div>'+
-    ((friendsKitPrice(i) - c) < 0 && num(i.price) > 0
+      '<div><div class="k">Kit margin</div><div class="v" style="color:'+((kitPrice(i)-c)<0?"var(--alert)":"var(--ok)")+'">'+
+        money(kitPrice(i)-c)+'</div></div></div>'+
+    ((kitPrice(i) - c) < 0 && num(i.price) > 0
       ? '<div class="astrip" style="border:1px solid #4A2C29;border-radius:4px;margin-top:8px"><span class="t">'+
-        'Friends kit price is '+money(c-friendsKitPrice(i))+' below cost</span></div>' : '')+
+        'Kit price is '+money(c-kitPrice(i))+' below cost</span></div>' : '')+
     sourcesHTML(i.id)+
     '<div class="sheetact"><button class="btn" onclick="labelSheet(\''+i.id+'\')">Label</button>'+
     '<button class="btn warn" onclick="deleteItem(\''+i.id+'\')">Delete</button>'+
@@ -4329,7 +4313,6 @@ function saveItem(id, quiet){
   i.supplierId = $("e_sup").value;
   i.orderQty = num($("e_oq").value);
   i.weight = num($("e_wt").value);
-  if($("e_pf")) i.priceFriends = num($("e_pf").value);
   if($("e_pk")) i.priceKit = num($("e_pk").value);
   lastTouched = i.id;
   save();
@@ -4432,13 +4415,10 @@ function brandSheet(backId, kind, stockKey){
       '<input id="lg_ko" type="number" step="1" value="'+kitOffPct()+'" '+
       'onchange="S.settings.kitOffPct=num(this.value)||25;save();renderAll();toast(\'Saved\')"></div>'+
     '<p class="hint" style="margin-top:-4px">The other anchor for a kit price, for products whose singles sell well above the formula.</p>'+
-    '<div class="grid2"><div class="field"><label>Kit × cost</label>'+
+    '<div class="field"><label>Kit × cost</label>'+
       '<input id="lg_kx" type="number" step="0.05" value="'+kitX()+'" '+
       'onchange="S.settings.kitX=num(this.value)||2;save();renderAll();toast(\'Saved\')"></div>'+
-    '<div class="field"><label>F&amp;F kit × cost</label>'+
-      '<input id="lg_ff" type="number" step="0.05" value="'+friendsX()+'" '+
-      'onchange="S.settings.friendsX=num(this.value)||1.5;save();renderAll();toast(\'Saved\')"></div></div>'+
-    '<p class="hint" style="margin-top:-4px">A $200 kit is $20 a vial: singles list at $55, a kit is $400, a friends kit $300. Any product can override all three.</p>'+
+    '<p class="hint" style="margin-top:-4px">A $200 kit is $20 a vial: singles list at $55, a kit is $400. Any product can override both. Customers with a markup % skip list prices entirely.</p>'+
     '<div class="field"><label>Statements on the vial label</label><textarea id="lg_disc" rows="2">'+esc(S.settings.disclaimer||"FOR RESEARCH ONLY\nNot For Human Use")+'</textarea></div>'+
     '<div class="modebar" style="grid-template-columns:1fr 1fr;margin-bottom:6px">'+
       '<button aria-pressed="'+(!S.settings.vialPurity)+'" onclick="S.settings.vialPurity=false;saveLocal();brandSheet()">Logo on vial</button>'+
@@ -5294,7 +5274,7 @@ function orderAddSheet(orderId, filter){
       'value="'+pv+'" placeholder="price" style="text-align:center;padding:6px"'+(out?' disabled':'')+'></span></span></div>';
   }).join("");
   sheet('<h2>Add to '+esc(o.ref)+'</h2>'+
-    '<p class="hint" style="margin-top:-6px">'+(tier==="friends"?"Friends &amp; family prices":"Retail prices")+' \u00b7 vials come out of stock when you add them.</p>'+
+    '<p class="hint" style="margin-top:-6px">'+(custMarkupPct(o.customerId)!==null?"Cost + "+custMarkupPct(o.customerId)+"% \u2014 this customer\'s rate":"List prices")+' \u00b7 vials come out of stock when you add them.</p>'+
     '<input id="oa_search" type="search" placeholder="Search products\u2026" value="'+esc(filter||"")+'" '+
       'oninput="orderAddSheet(\''+orderId+'\', this.value)" '+
       'style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px">'+
