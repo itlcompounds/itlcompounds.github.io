@@ -212,6 +212,7 @@ input[type=file]{padding:8px;font-size:13px}
   <div class="brand">
     <h1><span>ITL</span> Ops</h1>
     <span style="display:flex;align-items:center;gap:10px">
+      <span id="tempChip" class="eyebrow" style="letter-spacing:.1em;display:none;cursor:pointer"></span>
       <span id="syncState" class="eyebrow" style="letter-spacing:.1em"></span>
       <button class="eyebrow" id="exportBtn" style="letter-spacing:.12em">Backup<span id="bkDot" style="display:none;margin-left:5px;color:var(--alert)">●</span></button>
     </span>
@@ -333,7 +334,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260808-0413-dc01e4";
+const BUILD = "20260808-0428-1caabe";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -6130,6 +6131,49 @@ function startStationScale(){
   return true;
 }
 function stopStationScale(){ clearInterval(stationTimer); stationTimer = null; }
+
+/* Closet temperature — same relay pattern as the scale, but polled gently
+ * (every 5 min) since a closet moves slowly. The chip stays hidden until a
+ * sensor has actually reported once, so the header is unchanged for anyone
+ * without the ESP32. Reads off the sync URL, which is always configured. */
+const TEMP_ALERT_F = 80;   // red at or above this; sane ceiling for peptides
+let tempTimer = null, tempLast = null;
+async function tempTick(){
+  try{
+    const base = ((S.settings.syncUrl||"").trim() || DEFAULT_SYNC).replace(/\/+$/,"");
+    const r = await fetch(base + "/api/temp", {headers: syncHeaders()});
+    tempLast = await r.json();
+  }catch(e){ tempLast = null; }
+  renderTempChip();
+}
+function renderTempChip(){
+  const el = $("tempChip"); if(!el) return;
+  const j = tempLast;
+  if(!j || j.f === null || j.f === undefined){ el.style.display = "none"; return; }
+  el.style.display = "";
+  if(j.status === "sensor offline"){
+    el.textContent = "CLOSET ?";
+    el.style.color = "var(--alert)";
+  }else{
+    el.textContent = "CLOSET " + j.f.toFixed(1) + "\u00b0F";
+    el.style.color = j.f >= TEMP_ALERT_F ? "var(--alert)" : "";
+  }
+}
+function tempDetail(){
+  const j = tempLast; if(!j) return;
+  const bits = [];
+  if(Array.isArray(j.probes) && j.probes.length > 1) bits.push("probes " + j.probes.map(p => p.toFixed(1)).join(" / "));
+  if(j.hi !== null && j.hi !== undefined) bits.push("day high " + j.hi.toFixed(1) + "\u00b0F");
+  if(j.lo !== null && j.lo !== undefined) bits.push("day low " + j.lo.toFixed(1) + "\u00b0F");
+  if(j.status === "sensor offline") bits.push("last heard " + Math.round((j.age||0)/60) + " min ago");
+  toast(bits.length ? bits.join(" \u00b7 ") : "closet " + (j.f!==null?j.f.toFixed(1)+"\u00b0F":"?"));
+}
+function startTempPoll(){
+  const chip = $("tempChip"); if(chip) chip.onclick = tempDetail;
+  tempTick();
+  tempTimer = setInterval(tempTick, 5 * 60 * 1000);
+  document.addEventListener("visibilitychange", () => { if(!document.hidden) tempTick(); });
+}
 let scaleOrderId = null;
 function scaleSheet(oid){
   scaleOrderId = oid;
@@ -7230,7 +7274,7 @@ on("scanInput", "keydown", e => {
   try{ dedupeCodesOnce(); }catch(e){ console.warn("code dedupe failed", e); }
   try{ setTimeout(backupNudge, 1200); }catch(e){ console.warn("backup nudge failed", e); }
   [["logo", loadLogo], ["review", loadReview], ["polling", startPolling],
-   ["scale", reconnectScale], ["mode", setMode]].forEach(([what, fn]) => {
+   ["scale", reconnectScale], ["temp", startTempPoll], ["mode", setMode]].forEach(([what, fn]) => {
     try{ fn(); }catch(e){ console.warn(what + " init failed", e); }
   });
 })();
