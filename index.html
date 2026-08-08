@@ -334,7 +334,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260808-0428-1caabe";
+const BUILD = "20260808-2053-a01333";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1466,13 +1466,15 @@ function readCust(c){
   c.note = $("c_note").value.trim();
   return c;
 }
-function newCustSheet(backOrder){
+function newCustSheet(backOrder, backQuote){
+  const back = backQuote ? 'openQuote(\''+backQuote+'\')'
+             : backOrder ? 'openOrder(\''+backOrder+'\')' : 'closeSheet()';
   sheet('<h2>New customer</h2>'+custFields(null)+
-    '<div class="sheetact"><button class="btn" onclick="'+(backOrder?'openOrder(\''+backOrder+'\')':'closeSheet()')+'">Cancel</button>'+
-    '<button class="btn pri" onclick="saveNewCust('+(backOrder?'\''+backOrder+'\'':'null')+')">Save</button></div>');
+    '<div class="sheetact"><button class="btn" onclick="'+back+'">Cancel</button>'+
+    '<button class="btn pri" onclick="saveNewCust('+(backOrder?'\''+backOrder+'\'':'null')+','+(backQuote?'\''+backQuote+'\'':'null')+')">Save</button></div>');
   setTimeout(() => $("c_name").focus(), 60);
 }
-function saveNewCust(backOrder){
+function saveNewCust(backOrder, backQuote){
   if(!$("c_name").value.trim()){ toast("Give them a name"); return; }
   const c = readCust({id:uid("c")});
   S.customers.push(c);
@@ -1480,8 +1482,12 @@ function saveNewCust(backOrder){
     const o = S.orders.find(x => x.id === backOrder);
     if(o) o.customerId = c.id;
   }
+  if(backQuote){
+    const q = S.quotes.find(x => x.id === backQuote);
+    if(q) q.customerId = c.id;
+  }
   save(); renderAll();
-  if(backOrder) openOrder(backOrder); else closeSheet();
+  if(backQuote) openQuote(backQuote); else if(backOrder) openOrder(backOrder); else closeSheet();
   toast(c.name + " added");
 }
 function repeatLastOrder(custId){
@@ -6339,6 +6345,7 @@ function openQuote(id){
   sheet('<h2>Quote</h2>'+
     '<div class="grid2"><div class="field"><label>Reference</label><input id="q_ref" value="'+esc(q.ref||"")+'" placeholder="#Q-104"></div>'+
     '<div class="field"><label>Customer</label><select id="q_cust">'+custOptions(q.customerId||"")+'</select></div></div>'+
+    '<button class="btn full" style="margin-bottom:10px" onclick="saveQuote();newCustSheet(null,\''+q.id+'\')">+ New customer</button>'+
     '<div style="display:flex;gap:6px;font-family:var(--cond);font-size:9.5px;letter-spacing:.1em;color:var(--muted);padding:0 34px 4px 34px">'+
       '<span style="flex:1"></span><span style="width:52px;text-align:center">QTY</span><span style="width:64px;text-align:center">PRICE</span><span style="width:28px"></span></div>'+
     lines+
