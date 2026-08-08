@@ -333,7 +333,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260808-0144-bcc7b8";
+const BUILD = "20260808-0413-dc01e4";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -6911,10 +6911,17 @@ function shipSheet(oid){
   const o = S.orders.find(x => x.id === oid); if(!o) return;
   const key = S.settings.labelSize || "4x6";
   const cust = S.customers.find(c => c.id === o.customerId);
-  if(cust && !o.toName){ o.toName = cust.name; }
-  if(cust && !(o.toAddr||"").trim()){
-    o.toAddr = [cust.addr, [cust.city, cust.state, cust.zip].filter(Boolean).join(" ")].filter(Boolean).join("\n");
-    o.toCity = o.toCity || cust.city; o.toState = o.toState || cust.state; o.toZip = o.toZip || cust.zip;
+  if(cust){
+    // Each field backfills on its own. The old guard skipped city/state/ZIP
+    // whenever a street line existed — and rates read o.toZip directly, so a
+    // half-entered address meant a retyped ZIP, which is how a wrong ZIP and
+    // a FedEx billing correction happen. Never overwrite what's typed.
+    if(!o.toName) o.toName = cust.name;
+    if(!(o.toAddr||"").trim())
+      o.toAddr = [cust.addr, [cust.city, cust.state, cust.zip].filter(Boolean).join(" ")].filter(Boolean).join("\n");
+    if(!o.toCity)  o.toCity  = cust.city;
+    if(!o.toState) o.toState = cust.state;
+    if(!o.toZip)   o.toZip   = cust.zip;
   }
   sheet('<h2>Ship '+esc(o.ref)+'</h2>'+
     '<div class="field"><label>Ship to — name</label><input id="sh_name" value="'+esc(o.toName||"")+'"></div>'+
