@@ -333,7 +333,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260807-0721-775922";
+const BUILD = "20260808-0144-bcc7b8";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -2871,7 +2871,14 @@ function vendorPriceFor(supplierId, itemId){
 function priceSheet(supId){
   const s = S.suppliers.find(x => x.id === supId); if(!s) return;
   const list = Array.isArray(s.prices) ? s.prices : [];
-  const rows = list.length ? list.map((p,ix) => {
+  // Unmatched entries surface at the top — they're the ones needing a decision
+  // (link to a product, or confirm you don't carry it). Sort a view of
+  // [entry, original index] pairs so editPrice still hits the right record.
+  const ordered = list.map((p,ix) => [p,ix]).sort(([a],[b]) => {
+    const am = S.items.some(i => i.id === a.itemId), bm = S.items.some(i => i.id === b.itemId);
+    return am - bm;
+  });
+  const rows = list.length ? ordered.map(([p,ix]) => {
     const it = S.items.find(i => i.id === p.itemId);
     const badCat = !p.cat || CAT_JUNK.has(String(p.cat).toUpperCase());
     return '<button class="row" onclick="editPrice(\''+supId+'\','+ix+')"><span class="nm"><b>'+esc(p.name)+'</b><small>'+
