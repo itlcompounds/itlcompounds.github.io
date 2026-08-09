@@ -276,7 +276,7 @@ input[type=file]{padding:8px;font-size:13px}
 <!-- ================= STOCK ================= -->
 <section class="view" id="v-stock">
   <div class="sect" style="margin-top:4px">
-    <div class="eyebrow"><span>Products</span><span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="pill" id="demandBtn">Demand</button><button class="pill" id="reorderBtn">Reorder</button><button class="pill" id="repriceBtn">Reprice</button><button class="pill" id="priceListBtn">Price list</button><button class="pill" id="tidyBtn">Tidy</button><button class="pill brand" id="addItemBtn">+ New product</button></span></div>
+    <div class="eyebrow"><span>Products</span><span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="pill" id="demandBtn">Demand</button><button class="pill" id="reorderBtn">Reorder</button><button class="pill" id="priceListBtn">Price list</button><button class="pill" id="tidyBtn">Tidy</button><button class="pill brand" id="addItemBtn">+ New product</button></span></div>
     <input id="stockSearchBox" type="search" placeholder="Search products…" oninput="stockSearch(this.value)" style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px">
     <div id="stockList"></div>
   </div>
@@ -334,7 +334,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260809-0046-94ca28";
+const BUILD = "20260809-0753-d17974";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -521,32 +521,23 @@ function costBasis(i){
   });
   return best;
 }
-// List price is landed cost per vial times a fixed multiplier. Derived rather
-// than typed, so a price never silently drifts away from what a vial now costs.
-function markupX(){ const v = num(S.settings.markup); return v > 0 ? v : 2.75; }
-function suggestedPrice(i){ return costBasis(i) * markupX(); }
+// Prices are set by hand, per product, against the market. Cost — landed,
+// freight and fees included — is displayed as the margin check everywhere,
+// but nothing ever derives a price from it.
 function setKitPrice(id, v){
   const i = S.items.find(x => x.id === id); if(!i) return;
   saveItem(id, 1);
   i.priceKit = +num(v).toFixed(2);
   save(); openItem(id); toast("Kit at " + money(i.priceKit*10));
 }
-function applySuggested(id){
-  const i = S.items.find(x => x.id === id); if(!i) return;
-  const p = suggestedPrice(i);
-  if(!(p > 0)){ toast("No cost known for this product yet"); return; }
-  saveItem(id, 1);
-  i.price = +p.toFixed(2);
-  save(); openItem(id); toast("Priced at " + money(i.price));
-}
-function priceListText(mult, incStock, incSoon){
-  const m = num(mult) || num(S.settings.markup) || 2.75;
+function priceListText(incStock, incSoon){
+  // The menu is your set sales prices, verbatim; unpriced products are left off.
   const line = i => {
-    const per = Math.ceil(costBasis(i) * m);            // whole dollars read like a menu
+    const per = num(i.price);
     const nm = esc(i.name) + (i.dose && !nameHasDose(i.name, i.dose, doseUnit(i)) ? " " + i.dose + doseUnit(i).toLowerCase() : "");
-    return nm + " \u2014 $" + per + "/vial \u00b7 $" + (per*10) + "/kit";
+    return nm + " \u2014 " + money(per) + "/vial \u00b7 " + money(kitPrice(i)*10) + "/kit";
   };
-  const sellable = S.items.filter(i => !i.kind && costBasis(i) > 0)
+  const sellable = S.items.filter(i => !i.kind && num(i.price) > 0)
     .sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   const stock = sellable.filter(i => num(i.qty) > 0);
   const soon  = sellable.filter(i => num(i.qty) <= 0);
@@ -556,10 +547,9 @@ function priceListText(mult, incStock, incSoon){
   return parts.join("\n\n");
 }
 function priceListSheet(){
-  const m0 = num(S.settings.markup) || 2.75;
   sheet('<h2>Price list</h2>'+
-    '<p class="hint" style="margin-top:-6px">Sell prices at cost \u00d7 your multiplier \u2014 landed cost (fees and freight included) for stocked items, vendor price for by-order items. Edit the text before you send it.</p>'+
-    '<div class="grid2"><div class="field"><label>Multiplier</label><input id="pl_mult" type="number" step="any" inputmode="decimal" value="'+m0+'"></div>'+
+    '<p class="hint" style="margin-top:-6px">Your set sales prices, exactly as entered on each product \u2014 unpriced products are left off. Edit the text before you send it.</p>'+
+    '<div class="grid2">'+
     '<div class="field"><label>Include</label><div style="display:flex;gap:10px;padding-top:8px">'+
       '<label style="font-size:13px"><input type="checkbox" id="pl_stock" checked> In stock</label>'+
       '<label style="font-size:13px"><input type="checkbox" id="pl_soon" checked> Coming soon</label></div></div></div>'+
@@ -567,69 +557,23 @@ function priceListSheet(){
     '<div class="sheetact"><button class="btn" onclick="closeSheet()">Close</button>'+
     '<button class="btn pri" onclick="copyText(document.getElementById(\'pl_txt\').value,this)">Copy</button></div>');
   const regen = () => {
-    $("pl_txt").value = priceListText($("pl_mult").value, $("pl_stock").checked, $("pl_soon").checked);
+    $("pl_txt").value = priceListText($("pl_stock").checked, $("pl_soon").checked);
   };
-  ["pl_mult","pl_stock","pl_soon"].forEach(id => $(id).addEventListener("input", regen));
+  ["pl_stock","pl_soon"].forEach(id => $(id).addEventListener("input", regen));
   regen();
-}
-function repriceAllSheet(){
-  const locked = S.items.filter(i => i.priceLock && costBasis(i) > 0).length;
-  const hits = S.items.filter(i => costBasis(i) > 0 && !i.priceLock)
-    .map(i => ({i, was:num(i.price), now:+(suggestedPrice(i)).toFixed(2)}))
-    .filter(x => Math.abs(x.was - x.now) > 0.005);
-  if(!hits.length){ toast("Everything already matches"); return; }
-  sheet('<h2>Reprice '+hits.length+' products?</h2>'+
-    '<p class="hint">Landed cost per vial × '+markupX()+'. Products with no cost yet are skipped'+
-      (locked ? ', and '+locked+' with a locked price are left alone' : '')+'.</p>'+
-    '<div style="max-height:40vh;overflow:auto;margin:8px 0">'+
-      hits.slice(0,80).map(x => '<div class="row"><span class="nm"><b>'+esc(x.i.name)+'</b><small>cost '+
-        money(costBasis(x.i))+'</small></span><span class="rt"><b>'+money(x.now)+'</b>'+
-        (x.was ? 'was '+money(x.was) : 'unpriced')+'</span></div>').join("")+
-      (hits.length>80 ? '<p class="hint">…and '+(hits.length-80)+' more</p>' : '')+
-    '</div>'+
-    '<div class="sheetact"><button class="btn" onclick="closeSheet()">Cancel</button>'+
-    '<button class="btn pri" onclick="doRepriceAll()">Reprice them</button></div>');
-  window.__reprice = hits.map(x => [x.i.id, x.now]);
-}
-function doRepriceAll(){
-  (window.__reprice||[]).forEach(([id,p]) => {
-    const i = S.items.find(x => x.id === id); if(i) i.price = p;
-  });
-  const n = (window.__reprice||[]).length;
-  save(); closeSheet(); renderAll(); toast(n + " repriced");
 }
 // Three structures, all multipliers on landed cost per vial:
 //
 //                 single vial      kit of 10
-//   everyone      cost x 2.75      cost x 2.0
-//   friends       cost x 2.75      cost x 1.5
-//
 // Buying ten singles is not the same as buying a kit, which is why the pack
 // size has to come from the scanned code rather than the quantity.
 // Any of the three can be overridden per product — some singles command far
 // more than the formula, because they have never been sold as kits.
-function kitX(){ const v = num(S.settings.kitX); return v > 0 ? v : 2.0; }
-function friendsX(){ const v = num(S.settings.friendsX); return v > 0 ? v : 1.5; }
-// Where a single commands far more than the formula, the kit rate has to be
-// anchored to the single price instead — a volume discount off what you would
-// otherwise earn, not a markup on cost. Selling ten singles earns more; the
-// kit earns less per vial but clears the shelf and frees the cash to restock.
 function kitOffPct(){ const v = num(S.settings.kitOffPct); return (v > 0 && v < 100) ? v : 25; }
 function kitFromSingle(i){ return num(i.price) * (1 - kitOffPct()/100); }
-function kitFromCost(i){ const c = costBasis(i); return c > 0 ? c * kitX() : num(i.price); }
-// Formula kit price well under the single price means the single is premium
-// and the cost-based rule would give kits away.
-function kitLooksWrong(i){
-  return !(num(i.priceKit) > 0) && num(i.price) > 0 && kitFromCost(i) < num(i.price) * 0.6;
-}
 function kitPrice(i){
   if(num(i.priceKit) > 0) return num(i.priceKit);
-  return kitFromCost(i);
-}
-function friendsKitPrice(i){
-  if(num(i.priceFriends) > 0) return num(i.priceFriends);
-  const c = costBasis(i);
-  return c > 0 ? c * friendsX() : kitPrice(i);
+  return kitFromSingle(i);   // your single price minus the kit discount — never cost-derived
 }
 function doseUnit(i){ return (i && i.unit) === "iu" ? "IU" : (i && i.unit) === "mcg" ? "mcg" : "mg"; }
 function custDiscountPct(customerId){
@@ -3823,25 +3767,10 @@ function tidySheet(){
     '<div class="row"><span class="nm"><b>Add dose to names</b><small>'+nameless.length+
       ' products where the strength is missing — several doses of one compound are otherwise identical</small></span>'+
       (nameless.length ? '<button class="pill brand" onclick="doAddDose()">Fix</button>' : '<span class="pill ok">done</span>')+'</div>'+
-    '<div class="row"><span class="nm"><b>Kit prices worth checking</b><small>'+
-      S.items.filter(kitLooksWrong).length+' products where the cost formula would sell a kit far below ten singles</small></span>'+
-      (S.items.filter(kitLooksWrong).length ? '<button class="pill brand" onclick="kitCheckSheet()">Show</button>' : '<span class="pill ok">none</span>')+'</div>'+
     '<div class="row"><span class="nm"><b>Move unstocked to catalogue</b><small>'+unstocked.length+
       ' with no stock and no lot history — stops them raising low-stock alerts</small></span>'+
       (unstocked.length ? '<button class="pill brand" onclick="demoteUnstocked()">Fix</button>' : '<span class="pill ok">done</span>')+'</div>'+
     '<div class="sheetact"><button class="btn pri full" onclick="closeSheet()">Done</button></div>');
-}
-function kitCheckSheet(){
-  const hits = S.items.filter(kitLooksWrong);
-  sheet('<h2>Kit prices worth checking</h2>'+
-    '<p class="hint">These have no kit price set, so a scanned kit code would use cost × '+kitX()+
-    '. Where the single price is premium, that gives the kit away.</p>'+
-    '<div style="max-height:46vh;overflow:auto;margin:8px 0">'+
-      hits.map(i => '<button class="row low" onclick="openItem(\''+i.id+'\')"><span class="nm"><b>'+esc(i.name)+
-        '</b><small>single '+money(num(i.price))+' · ten singles '+money(num(i.price)*10)+'</small></span>'+
-        '<span class="rt"><b style="color:var(--alert)">'+money(kitFromCost(i)*10)+'</b>formula kit</span></button>').join("")+
-    '</div>'+
-    '<div class="sheetact"><button class="btn pri full" onclick="tidySheet()">Back</button></div>');
 }
 function doAddDose(){
   let n = 0;
@@ -4042,7 +3971,7 @@ function doneOrdersSheet(){
       const t = orderTotals(o);
       return '<button class="row" onclick="openOrder(\''+o.id+'\')"><span class="nm"><b>'+esc(o.ref)+'</b>'+
         '<small>'+(o.paidAt ? 'paid '+toDateInput(o.paidAt) : 'closed unpaid')+'</small></span>'+
-        '<span class="rt"><b>'+money(t.rev)+'</b></span></button>';
+        '<span class="rt"><b>'+money(t.rev)+'</b>'+(t.rev>0?Math.round(100*t.profit/t.rev)+'% margin':'')+'</span></button>';
     }).join("")+
     '<div class="sheetact"><button class="btn pri full" onclick="closeSheet()">Done</button></div>');
 }
@@ -4063,6 +3992,7 @@ function renderOrders(){
       (active?' <span class="pill brand">picking</span>':'')+
       (owes?' <span class="pill alert">owes</span>':(o.paidAt?' <span class="pill ok">paid</span>':''))+'</b><small>'+o.lines.length+' line'+(o.lines.length===1?'':'s')+' · '+
       esc(o.tracking||"no tracking")+'</small></span><span class="rt"><b>'+money(t.rev)+'</b>'+
+      (t.rev>0&&!isQ?Math.round(100*t.profit/t.rev)+'% margin':'')+
       '<span class="pill '+pillClass+'">'+esc(o.status)+'</span></span></button>';
   }).join("") + (doneN ? '<div style="text-align:center;margin-top:6px"><button class="pill" onclick="doneOrdersSheet()">Completed · '+doneN+'</button></div>' : "");
 }
@@ -4235,6 +4165,10 @@ function openItem(id){
     '<div class="grid3"><div class="field"><label>Sales price \u2014 each</label><input id="e_price" type="number" step="any" value="'+num(i.price)+'"></div>'+
     '<div class="field"><label>On hand</label><input id="e_qty" type="number" value="'+num(i.qty)+'"></div>'+
     '<div class="field"><label>Reorder at</label><input id="e_re" type="number" value="'+num(i.reorder)+'"></div></div>'+
+    (costBasis(i) > 0
+      ? '<p class="hint" style="margin-top:-4px">You paid <b class="num">'+money(costBasis(i))+'</b> a vial \u2014 landed, freight and fees in.'+
+        (num(i.price) > 0 ? ' At '+money(num(i.price))+' that\'s <b class="num" style="color:var(--'+((num(i.price)-costBasis(i))<0?'alert':'ok')+')">'+money(num(i.price)-costBasis(i))+'</b> margin ('+Math.round(marginPct(costBasis(i), num(i.price)))+'%).' : '')+'</p>'
+      : '<p class="hint" style="margin-top:-4px">No landed cost yet \u2014 it appears once stock is received against a purchase.</p>')+
     '<div class="grid2"><div class="field"><label>Scan code (base)</label><input id="e_code" value="'+esc(i.code)+'" autocapitalize="characters"></div>'+
     '<div class="field"><label>Bin location</label><input id="e_bin" value="'+esc(i.bin||"")+'" placeholder="A-01-3" autocapitalize="characters"></div></div>'+
     '<p class="hint" style="margin-top:-4px">Scanning <b class="num">'+esc(i.code||"CODE")+'-01</b> logs one vial; <b class="num">'+esc(i.code||"CODE")+'-10</b> logs ten.</p>'+
@@ -4247,15 +4181,6 @@ function openItem(id){
     '<div class="field"><label>Weight each (g) — used for shipping rates</label><input id="e_wt" type="number" step="any" value="'+(num(i.weight)||"")+'" placeholder="vial + packaging"></div>'+
     '<button class="btn full" style="margin-bottom:10px;border-color:#28503A;color:var(--ok)" onclick="messageSheet(\''+(i.supplierId||"")+'\',[S.items.find(x=>x.id===\''+i.id+'\')])">WhatsApp a restock request</button>'+
     '<button class="btn full" style="margin-bottom:10px" onclick="recordSaleSheet(\''+i.id+'\')">Record a past sale</button>'+
-    (suggestedPrice(i) > 0
-      ? '<p class="hint" style="margin-top:-4px">Cost '+money(costBasis(i))+' × '+markupX()+' = <b class="num">'+money(suggestedPrice(i))+'</b>'+
-        (Math.abs(num(i.price)-suggestedPrice(i)) > 0.005
-          ? ' <button class="pill brand" onclick="applySuggested(\''+i.id+'\')">use it</button>' : ' — matches')+'</p>'
-      : '')+
-    '<div class="modebar" style="grid-template-columns:1fr 1fr;margin-bottom:8px">'+
-      '<button type="button" aria-pressed="'+(!i.priceLock)+'" onclick="setPriceLock(\''+i.id+'\',0)">Follow the formula</button>'+
-      '<button type="button" aria-pressed="'+(!!i.priceLock)+'" onclick="setPriceLock(\''+i.id+'\',1)">Price set by hand</button></div>'+
-    '<p class="hint" style="margin-top:-4px">Locked products are skipped by Reprice, so a bulk change can\'t undo a price you set deliberately.</p>'+
     (soldPerDay(i.id) > 0 || num(i.qty) > 0
       ? (() => { const d = demandRow(i);
           return '<p class="hint" style="margin-top:6px">'+
@@ -4264,10 +4189,6 @@ function openItem(id){
             'restock takes '+d.lead+'d — <span style="color:var(--'+(d.tone==="alert"?"alert":d.tone==="ok"?"ok":"muted")+')">'+
             esc(d.verdict)+'</span></p>'; })()
       : '')+
-    (kitLooksWrong(i)
-      ? '<div class="astrip" style="border:1px solid #4A2C29;border-radius:4px;margin:10px 0"><span class="t">'+
-        'No kit price set — the cost formula would sell a kit at '+money(kitFromCost(i)*10)+
-        ' when ten singles fetch '+money(num(i.price)*10)+'</span></div>' : '')+
     '<div class="eyebrow" style="margin:12px 0 6px">Kit of 10 — price per vial</div>'+
     '<div class="field"><label>Per vial in a kit</label>'+
       '<input id="e_pk" type="number" step="any" value="'+(num(i.priceKit)||"")+'" placeholder="'+kitPrice(i).toFixed(2)+'"></div>'+
@@ -4285,12 +4206,9 @@ function openItem(id){
           Math.round(100*gap/tenSingles)+'% off</span>, in exchange for moving ten at once.'
         : gap < 0 ? ' — <span style="color:var(--ok)">'+money(-gap)+' more than singles.</span>' : '.')+'</p>';
     })() : '')+
-    '<p class="hint" style="margin-top:-4px">'+
-      '<button class="pill" onclick="setKitPrice(\''+i.id+'\','+kitFromCost(i).toFixed(2)+')">cost × '+kitX()+' = '+money(kitFromCost(i)*10)+'</button> '+
-      '<button class="pill" onclick="setKitPrice(\''+i.id+'\','+kitFromSingle(i).toFixed(2)+')">'+kitOffPct()+'% off singles = '+money(kitFromSingle(i)*10)+'</button>'+
-      '</p>'+
-    '<p class="hint">Ten singles would fetch '+money(num(i.price)*10)+'. A kit at '+money(kitPrice(i)*10)+
-      ' gives up '+money(num(i.price)*10 - kitPrice(i)*10)+' to move ten vials at once.</p>'+
+    (num(i.price) > 0 && !(num(i.priceKit) > 0)
+      ? '<p class="hint" style="margin-top:-4px"><button class="pill" onclick="setKitPrice(\''+i.id+'\','+kitFromSingle(i).toFixed(2)+')">set kit at '+kitOffPct()+'% off singles = '+money(kitFromSingle(i)*10)+'</button></p>'
+      : '')+
     '<div class="rcells" style="border:1px solid var(--line);border-radius:4px">'+
       '<div><div class="k">Unit cost</div><div class="v">'+money(c)+'</div></div>'+
       '<div><div class="k">Single margin</div><div class="v">'+money(num(i.price)-c)+'</div></div>'+
@@ -4303,12 +4221,6 @@ function openItem(id){
     '<div class="sheetact"><button class="btn" onclick="labelSheet(\''+i.id+'\')">Label</button>'+
     '<button class="btn warn" onclick="deleteItem(\''+i.id+'\')">Delete</button>'+
     '<button class="btn pri" onclick="saveItem(\''+i.id+'\')">Save</button></div>');
-}
-function setPriceLock(id, v){
-  const i = S.items.find(x => x.id === id); if(!i) return;
-  saveItem(id, 1);
-  i.priceLock = !!v;
-  save(); openItem(id);
 }
 function setCatalog(id, v){
   const i = S.items.find(x => x.id === id); if(!i) return;
@@ -4427,18 +4339,11 @@ function brandSheet(backId, kind, stockKey){
     '<div class="field"><label>Wordmark beside the logo — one line each</label>'+
       '<textarea id="lg_tag" rows="2" placeholder="IN THE LAB&#10;COMPOUNDS">'+
       esc(S.settings.tagline===undefined?"IN THE LAB\nCOMPOUNDS":S.settings.tagline)+'</textarea></div>'+
-    '<div class="field"><label>List price = landed cost ×</label>'+
-      '<input id="lg_mk" type="number" step="0.05" value="'+markupX()+'" '+
-      'onchange="S.settings.markup=num(this.value)||2.75;save();renderAll();toast(\'Saved\')"></div>'+
-    '<p class="hint" style="margin-top:-4px">A $200 kit is $20 a vial; at 2.75 that lists at $55.</p>'+
     '<div class="field"><label>Kit discount off single price (%)</label>'+
       '<input id="lg_ko" type="number" step="1" value="'+kitOffPct()+'" '+
       'onchange="S.settings.kitOffPct=num(this.value)||25;save();renderAll();toast(\'Saved\')"></div>'+
-    '<p class="hint" style="margin-top:-4px">The other anchor for a kit price, for products whose singles sell well above the formula.</p>'+
-    '<div class="field"><label>Kit × cost</label>'+
-      '<input id="lg_kx" type="number" step="0.05" value="'+kitX()+'" '+
-      'onchange="S.settings.kitX=num(this.value)||2;save();renderAll();toast(\'Saved\')"></div>'+
-    '<p class="hint" style="margin-top:-4px">A $200 kit is $20 a vial: singles list at $55, a kit is $400. Any product can override both. Customers with a markup % skip list prices entirely.</p>'+
+    '<p class="hint" style="margin-top:-4px">When a product has no kit price of its own, the kit rate is the single price minus this \u2014 never derived from cost.</p>'+
+    '<p class="hint" style="margin-top:-4px">Prices live on each product \u2014 nothing here derives them. Customers with a discount % pay their rate off those prices.</p>'+
     '<div class="field"><label>Statements on the vial label</label><textarea id="lg_disc" rows="2">'+esc(S.settings.disclaimer||"FOR RESEARCH ONLY\nNot For Human Use")+'</textarea></div>'+
     '<div class="modebar" style="grid-template-columns:1fr 1fr;margin-bottom:6px">'+
       '<button aria-pressed="'+(!S.settings.vialPurity)+'" onclick="S.settings.vialPurity=false;saveLocal();brandSheet()">Logo on vial</button>'+
@@ -5282,7 +5187,7 @@ function orderAddSheet(orderId, filter){
                    String(a.name||"").localeCompare(String(b.name||""),undefined,{numeric:true}));
   const rows = pool.map(i => {
     const listP = priceFor(i, tier, 1, o.customerId);
-    const sell = listP > 0 ? listP : +(suggestedPrice(i)||0).toFixed(2);
+    const sell = listP;
     const v = prev[i.id] || "0";
     const out = num(i.qty) <= 0;
     const pv = prevP[i.id] != null ? prevP[i.id] : (sell > 0 ? sell : "");
@@ -6440,12 +6345,10 @@ function addQLine(itemId){
   const hit = q.lines.find(l => l.itemId === itemId);
   if(hit) hit.qty = num(hit.qty) + 1;
   else {
-    // List minus this quote's discount; an unpriced product falls back to
-    // cost × the standard markup so it never quotes at $0.
+    // List minus this quote's discount. An unpriced product lands at $0 on
+    // purpose: the line shows its landed cost, and you type the price.
     const cc = quoteCost(itemId);
-    const lp = priceFor(it, "retail", 1, q.customerId);
-    const p0 = lp ||
-      (num(cc.per) > 0 ? Math.round(cc.per * (num(S.settings.markup)||2.75) * (1 - quotePct(q)/100) * 100) / 100 : 0);
+    const p0 = priceFor(it, "retail", 1, q.customerId);
     q.lines.push({itemId, qty:1, price:p0});
   }
   quoteFilter = "";
@@ -6508,12 +6411,10 @@ function applyQuoteMult(){
   (q.lines||[]).forEach(l => {
     const it = S.items.find(i => i.id === l.itemId);
     const lp = num(it && it.price);
-    const cc = quoteCost(l.itemId, l.srcSup);
-    const base = lp > 0 ? lp : (num(cc.per) > 0 ? cc.per * (num(S.settings.markup)||2.75) : 0);
-    if(base > 0){ l.price = Math.round(base * (1 - d/100) * 100) / 100; priced++; }
+    if(lp > 0){ l.price = Math.round(lp * (1 - d/100) * 100) / 100; priced++; }
   });
   save();
-  toast(priced + " line" + (priced===1?"":"s") + " priced at list \u2212 " + quotePct(q) + "%");
+  toast(priced + " line" + (priced===1?"":"s") + " priced at list \u2212 " + quotePct(q) + "% \u00b7 unpriced products untouched");
   openQuote(q.id);
 }
 function saveQuote(){
@@ -7194,7 +7095,6 @@ on("commitBtn", "click", () => {
 on("camBtn", "click", toggleCam);
 on("addItemBtn", "click", () => newItemSheet(""));
 on("tidyBtn", "click", tidySheet);
-on("repriceBtn", "click", repriceAllSheet);
 on("priceListBtn", "click", priceListSheet);
 on("demandBtn", "click", demandSheet);
 on("reorderBtn", "click", draftReorders);
