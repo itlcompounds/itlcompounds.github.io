@@ -334,7 +334,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260808-2248-c55fc8";
+const BUILD = "20260808-2310-18eb3c";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -457,7 +457,23 @@ function saveLocal(){
     }catch(e){ /* no local store: sync is the system of record */ }
   }, 250);
 }
+function renderSyncState(){
+  const ss = $("syncState");
+  if(!ss) return;
+  let txt = "", col = "var(--muted)";
+  if(!loadOK){ txt = "\u25cf LOAD FAILED"; col = "var(--alert)"; }
+  else if(!syncURL()){ txt = "\u25cf LOCAL ONLY"; col = "var(--muted)"; }
+  else if(syncBusy){ txt = "\u25cf SYNCING"; col = "var(--brand)"; }
+  else if(syncMsg && !syncOk){ txt = "\u25cf PUSH FAILING"; col = "var(--alert)"; }
+  else if(syncDirty){ txt = "\u25cf SAVING\u2026"; col = "var(--brand)"; }
+  else if(num(S.settings.syncRev)){ txt = "\u25cf REV " + num(S.settings.syncRev); col = "var(--ok)"; }
+  else { txt = "\u25cf NOT SYNCED"; col = "var(--alert)"; }
+  ss.textContent = txt; ss.style.color = col;
+  ss.style.cursor = "pointer"; ss.onclick = syncSheet;
+}
+let syncDirty = false;   // true = local changes the server hasn't confirmed
 function save(){
+  syncDirty = true;
   saveLocal();
   if(typeof scheduleSync === "function") scheduleSync();
 }
@@ -982,10 +998,16 @@ async function pushSync(force, quiet){
     if(!r.ok) throw new Error("HTTP "+r.status);
     const j = await r.json();
     S.settings.syncRev = j.rev; S.settings.syncAt = j.at;
+    syncDirty = false; syncOk = true; syncMsg = "";
     saveLocal();
     if(!quiet) toast("Synced · revision " + j.rev);
+    renderSyncState();
     return true;
   }catch(e){
+    // A quiet push that fails must never fail silently: local changes exist
+    // that the server doesn't have, and the only trace used to be nothing.
+    syncOk = false; syncMsg = "Push failed: " + e.message;
+    renderSyncState();
     if(!quiet) toast("Sync failed (" + e.message + ")");
     return false;
   }finally{ syncBusy = false; }
@@ -1002,6 +1024,10 @@ async function pollSync(){
   // next 20s tick after the sheet closes picks the pull up instead.
   const sh = document.getElementById("sheet");
   if(sh && sh.classList.contains("on")) return;
+  // Unpushed local changes outrank whatever the server has: pulling now
+  // would silently revert them (completions were being undone this way).
+  // Push first; only a confirmed push clears the flag and lets pulls resume.
+  if(syncDirty){ pushSync(false, true); return; }
   try{
     const r = await fetch(syncURL(), {headers: syncHeaders()});
     if(!r.ok) return;
@@ -3719,18 +3745,7 @@ function renderAll(){
   if(qd) qd.hidden = queuedOrders().length === 0;
   const bd = $("bkDot");
   if(bd){ const a = backupAgeDays(); bd.style.display = (a === null || a >= 7) ? "inline" : "none"; }
-  const ss = $("syncState");
-  if(ss){
-    let txt = "", col = "var(--muted)";
-    if(!loadOK){ txt = "● LOAD FAILED"; col = "var(--alert)"; }
-    else if(!syncURL()){ txt = "● LOCAL ONLY"; col = "var(--muted)"; }
-    else if(syncBusy){ txt = "● SYNCING"; col = "var(--brand)"; }
-    else if(syncMsg && !syncOk){ txt = "● SYNC ERROR"; col = "var(--alert)"; }
-    else if(num(S.settings.syncRev)){ txt = "● REV " + num(S.settings.syncRev); col = "var(--ok)"; }
-    else { txt = "● NOT SYNCED"; col = "var(--alert)"; }
-    ss.textContent = txt; ss.style.color = col;
-    ss.style.cursor = "pointer"; ss.onclick = syncSheet;
-  }
+  renderSyncState();
   renderLow(); renderRecent(); renderStock(); renderSupplies(); renderSuppliers(); renderPOs(); renderLots(); renderOrders(); renderQueue(); renderQuotes(); renderCustomers();
   // Re-rendering replaces the DOM, which would otherwise drop you at the top.
   if(y) window.scrollTo(0, y);
@@ -5488,6 +5503,7 @@ function completeOrder(id){
   if(srcQ){ srcQ.status = "won"; srcQ.orderId = srcQ.orderId || id; }
   if(S.activeOrder === id) S.activeOrder = null;
   save(); renderAll(); toast("Order closed");
+  pushSync(false, true);   // land it on the server now, not in 2.5s
   openOrder(id);
 }
 function reopenOrder(id){
