@@ -334,7 +334,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260808-2310-18eb3c";
+const BUILD = "20260809-0046-94ca28";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -632,25 +632,20 @@ function friendsKitPrice(i){
   return c > 0 ? c * friendsX() : kitPrice(i);
 }
 function doseUnit(i){ return (i && i.unit) === "iu" ? "IU" : (i && i.unit) === "mcg" ? "mcg" : "mg"; }
-function custMarkupPct(customerId){
+function custDiscountPct(customerId){
   const c = customerId && S.customers.find(x => x.id === customerId);
-  const p = c ? c.markupPct : null;
-  return (p !== null && p !== undefined && p !== "" && num(p) > 0) ? num(p) : null;
+  const d = num(c && c.discountPct);
+  return (d > 0 && d < 100) ? d : 0;
 }
 function priceFor(i, tier, packQty, custId){
   if(!i) return 0;
-  // A customer with a markup % buys at landed cost + that percent — every
-  // path (orders, scans, repeats, quotes, pickers) routes through here, so
-  // the override lives here once. Cost-plus has no kit/single distinction;
-  // the percent IS the margin. Unknown cost falls through to list pricing
-  // rather than ever defaulting a sale to $0.
-  const pct = custMarkupPct(custId);
-  if(pct !== null){
-    const per = num(quoteCost(i.id).per);
-    if(per > 0) return Math.round(per * (1 + pct/100) * 100) / 100;
-  }
-  if(num(packQty) < 10) return num(i.price);                     // singles: list
-  return kitPrice(i);
+  // One list price per product (single or kit rate), set by the market.
+  // A customer's standing discount comes off that list — every selling
+  // path routes through here, so the relationship is applied once,
+  // everywhere, without touching cost.
+  const base = num(packQty) < 10 ? num(i.price) : kitPrice(i);
+  const d = custDiscountPct(custId);
+  return d ? Math.round(base * (1 - d/100) * 100) / 100 : base;
 }
 function tierOf(customerId){
   // Tiers are retired — pricing is per-customer markup % or list. "retail"
@@ -1491,9 +1486,18 @@ function custFields(c){
     '<div class="grid3"><div class="field"><label>City</label><input id="c_city" value="'+esc(c.city||"")+'"></div>'+
     '<div class="field"><label>State</label><input id="c_state" maxlength="2" value="'+esc(c.state||"")+'"></div>'+
     '<div class="field"><label>ZIP</label><input id="c_zip" inputmode="numeric" value="'+esc(c.zip||"")+'"></div></div>'+
-    '<div class="field"><label>Markup % over cost \u2014 optional; prices every sale at landed cost + this</label>'+
-      '<input id="c_markup" type="number" step="any" inputmode="decimal" value="'+(c.markupPct==null?"":c.markupPct)+'"></div>'+
+    '<div class="eyebrow" style="margin:12px 0 6px">Their price \u2014 % off list</div>'+
+    '<div class="modebar" id="c_disc" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px">'+
+      [0,10,25,50].map(d =>
+        '<button type="button" data-d="'+d+'" aria-pressed="'+((num(c.discountPct)||0)===d)+'" onclick="setCustDisc('+d+')">'+(d===0?'List':d+'% off')+'</button>').join("")+'</div>'+
     '<div class="field"><label>Notes</label><input id="c_note" value="'+esc(c.note||"")+'"></div>';
+}
+let custDiscPick = null;
+function setCustDisc(d){
+  custDiscPick = d;
+  const bar = $("c_disc");
+  if(bar) bar.querySelectorAll("button").forEach(b =>
+    b.setAttribute("aria-pressed", String(num(b.dataset.d) === d)));
 }
 function readCust(c){
   c.name = $("c_name").value.trim() || c.name;
@@ -1501,8 +1505,8 @@ function readCust(c){
   c.addr = $("c_addr").value; c.city = $("c_city").value.trim();
   c.state = $("c_state").value.trim().toUpperCase(); c.zip = $("c_zip").value.trim();
   c.note = $("c_note").value.trim();
-  const mp = $("c_markup") ? $("c_markup").value.trim() : "";
-  c.markupPct = mp === "" ? null : num(mp);
+  if(custDiscPick !== null) c.discountPct = custDiscPick;
+  custDiscPick = null;
   return c;
 }
 function newCustSheet(backOrder, backQuote){
@@ -1606,7 +1610,8 @@ function renderCustomers(){
     const n = S.orders.filter(o => o.customerId === c.id).length;
     return '<button class="row" onclick="openCust(\''+c.id+'\')"><span class="nm"><b>'+esc(c.name)+'</b><small>'+
       esc(c.phone||c.email||"no contact")+' · '+n+' order'+(n===1?'':'s')+'</small></span>'+
-      '<span class="rt"><span class="pill'+(c.phone?' ok':'')+'">'+(c.phone?'reachable':'no phone')+'</span></span></button>';
+      '<span class="rt">'+(custDiscountPct(c.id)?'<span class="pill brand">'+custDiscountPct(c.id)+'% off</span> ':'')+
+        '<span class="pill'+(c.phone?' ok':'')+'">'+(c.phone?'reachable':'no phone')+'</span></span></button>';
   }).join("");
 }
 
@@ -4227,7 +4232,7 @@ function openItem(id){
     '<div class="field"><label>Unit</label><select id="e_unit">'+
       ['mg','iu','mcg'].map(u=>'<option value="'+u+'"'+((i.unit||"mg")===u?' selected':'')+'>'+(u==='iu'?'IU':u)+'</option>').join("")+
     '</select></div>'+
-    '<div class="grid3"><div class="field"><label>Sells for</label><input id="e_price" type="number" step="any" value="'+num(i.price)+'"></div>'+
+    '<div class="grid3"><div class="field"><label>Sales price \u2014 each</label><input id="e_price" type="number" step="any" value="'+num(i.price)+'"></div>'+
     '<div class="field"><label>On hand</label><input id="e_qty" type="number" value="'+num(i.qty)+'"></div>'+
     '<div class="field"><label>Reorder at</label><input id="e_re" type="number" value="'+num(i.reorder)+'"></div></div>'+
     '<div class="grid2"><div class="field"><label>Scan code (base)</label><input id="e_code" value="'+esc(i.code)+'" autocapitalize="characters"></div>'+
@@ -5172,7 +5177,7 @@ function openOrder(id){
     '<div class="grid2"><div class="field"><label>Shipping charged</label>'+shipChargedSelect("o_sc2",o.shipCharged)+'</div>'+
     '<div class="field"><label>Postage cost</label><input id="o_scost2" type="number" step="any" value="'+num(o.shipCost)+'"></div></div>'+
     '<div class="field"><label>Status</label><select id="o_status">'+
-    ["open","packed","shipped"].map(s => '<option'+(o.status===s?' selected':'')+'>'+s+'</option>').join("")+'</select></div>'+
+    ["open","packed","shipped"].concat(o.status==="done"?["done"]:[]).map(s => '<option'+(o.status===s?' selected':'')+'>'+s+'</option>').join("")+'</select></div>'+
     (o.noCharge
       ? ''
       : o.paidAt
@@ -5229,7 +5234,11 @@ function saveOrder(id, quiet){
   o.tracking = $("o_track").value.trim();
   o.shipCharged = num($("o_sc2").value);
   o.shipCost = num($("o_scost2").value);
-  o.status = $("o_status").value;
+  // A completed order's status changes only through the explicit Reopen
+  // button. The dropdown used to lack a "done" option, so it displayed
+  // "open" on completed orders — and Save wrote that lie back, silently
+  // un-completing every order right after Complete was tapped.
+  if(o.status !== "done") o.status = $("o_status").value;
   if(o.status === "shipped" && S.activeOrder === o.id) S.activeOrder = null;
   save(); renderAll();
   if(quiet) return;
@@ -5289,7 +5298,7 @@ function orderAddSheet(orderId, filter){
       'value="'+pv+'" placeholder="price" style="text-align:center;padding:6px"'+(out?' disabled':'')+'></span></span></div>';
   }).join("");
   sheet('<h2>Add to '+esc(o.ref)+'</h2>'+
-    '<p class="hint" style="margin-top:-6px">'+(custMarkupPct(o.customerId)!==null?"Cost + "+custMarkupPct(o.customerId)+"% \u2014 this customer\'s rate":"List prices")+' \u00b7 vials come out of stock when you add them.</p>'+
+    '<p class="hint" style="margin-top:-6px">'+(custDiscountPct(o.customerId)?custDiscountPct(o.customerId)+"% off list \u2014 this customer\'s rate":"List prices")+' \u00b7 vials come out of stock when you add them.</p>'+
     '<input id="oa_search" type="search" placeholder="Search products\u2026" value="'+esc(filter||"")+'" '+
       'oninput="orderAddSheet(\''+orderId+'\', this.value)" '+
       'style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px">'+
@@ -5504,7 +5513,7 @@ function completeOrder(id){
   if(S.activeOrder === id) S.activeOrder = null;
   save(); renderAll(); toast("Order closed");
   pushSync(false, true);   // land it on the server now, not in 2.5s
-  openOrder(id);
+  closeSheet();            // back to the list, where it visibly leaves
 }
 function reopenOrder(id){
   const srcQ = (S.quotes||[]).find(x => x.orderId === id);
@@ -6380,8 +6389,8 @@ function openQuote(id){
     '<div class="field" style="margin-top:10px"><label>Add a product</label>'+
       '<input id="q_find" value="'+esc(quoteFilter)+'" placeholder="type to search" oninput="quoteFilter=this.value;renderQuoteFind()"></div>'+
     '<div id="q_found" style="max-height:26vh;overflow:auto"></div>'+
-    '<div class="grid2"><div class="field"><label>Markup % over cost</label><input id="q_mult" type="number" step="any" inputmode="decimal" value="'+quotePct(q)+'"></div>'+
-    '<div class="field"><label>&#8203;</label><button class="btn full" onclick="applyQuoteMult()">Price all at cost + %</button></div></div>'+
+    '<div class="grid2"><div class="field"><label>Discount % off list</label><input id="q_mult" type="number" step="any" inputmode="decimal" value="'+quotePct(q)+'"></div>'+
+    '<div class="field"><label>&#8203;</label><button class="btn full" onclick="applyQuoteMult()">Price all at list \u2212 %</button></div></div>'+
     '<p class="hint" style="margin-top:-6px">Stocked lines use true landed cost \u2014 goods, freight, and Coinbase fees are already inside the per-vial number, so the percentage sits on top of the true number automatically. Estimated lines (no stock) are bare vendor prices; treat those margins as ceilings.</p>'+
     '<div class="grid2" style="margin-top:10px"><div class="field"><label>Shipping charged</label><input id="q_ship" type="number" step="any" value="'+num(q.shipCharged)+'"></div>'+
     '<div class="field"><label>Valid for (days)</label><input id="q_valid" type="number" value="'+(num(q.validDays)||7)+'"></div></div>'+
@@ -6431,11 +6440,12 @@ function addQLine(itemId){
   const hit = q.lines.find(l => l.itemId === itemId);
   if(hit) hit.qty = num(hit.qty) + 1;
   else {
-    // No memorising price lists: an unpriced product quotes itself at
-    // cost × this quote's multiplier until a real retail price exists.
+    // List minus this quote's discount; an unpriced product falls back to
+    // cost × the standard markup so it never quotes at $0.
     const cc = quoteCost(itemId);
-    const p0 = num(it && it.price) ||
-      (num(cc.per) > 0 ? Math.round(cc.per * quoteMult(q) * 100) / 100 : 0);
+    const lp = priceFor(it, "retail", 1, q.customerId);
+    const p0 = lp ||
+      (num(cc.per) > 0 ? Math.round(cc.per * (num(S.settings.markup)||2.75) * (1 - quotePct(q)/100) * 100) / 100 : 0);
     q.lines.push({itemId, qty:1, price:p0});
   }
   quoteFilter = "";
@@ -6483,27 +6493,27 @@ function readQuote(q){
   if($("q_cust")) q.customerId = $("q_cust").value;
   if($("q_ship")) q.shipCharged = num($("q_ship").value);
   if($("q_valid")) q.validDays = num($("q_valid").value) || 7;
-  if($("q_mult")) q.markupPct = $("q_mult").value === "" ? null : num($("q_mult").value);
+  if($("q_mult")) q.discPct = $("q_mult").value === "" ? null : num($("q_mult").value);
 }
 function quotePct(q){
-  // explicit on the quote -> the customer's account -> legacy multiplier
-  if(q && q.markupPct !== undefined && q.markupPct !== null && q.markupPct !== "") return num(q.markupPct);
-  const cp = custMarkupPct(q && q.customerId);
-  if(cp !== null) return cp;
-  return Math.round(((num(q && q.mult) || num(S.settings.markup) || 2.75) - 1) * 1000) / 10;
+  // discount %: explicit on the quote -> the customer's standing rate -> 0
+  if(q && q.discPct !== undefined && q.discPct !== null && q.discPct !== "") return num(q.discPct);
+  return custDiscountPct(q && q.customerId);
 }
-function quoteMult(q){ return 1 + quotePct(q) / 100; }
 function applyQuoteMult(){
   const q = S.quotes.find(x => x.id === curQuote); if(!q) return;
   readQuote(q);
-  const m = quoteMult(q);
+  const d = quotePct(q);
   let priced = 0;
   (q.lines||[]).forEach(l => {
+    const it = S.items.find(i => i.id === l.itemId);
+    const lp = num(it && it.price);
     const cc = quoteCost(l.itemId, l.srcSup);
-    if(num(cc.per) > 0){ l.price = Math.round(cc.per * m * 100) / 100; priced++; }
+    const base = lp > 0 ? lp : (num(cc.per) > 0 ? cc.per * (num(S.settings.markup)||2.75) : 0);
+    if(base > 0){ l.price = Math.round(base * (1 - d/100) * 100) / 100; priced++; }
   });
   save();
-  toast(priced + " line" + (priced===1?"":"s") + " priced at cost + " + quotePct(q) + "%");
+  toast(priced + " line" + (priced===1?"":"s") + " priced at list \u2212 " + quotePct(q) + "%");
   openQuote(q.id);
 }
 function saveQuote(){
