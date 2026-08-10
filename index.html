@@ -334,7 +334,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260809-0753-d17974";
+const BUILD = "20260810-0900-d10359";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4169,6 +4169,19 @@ function openItem(id){
       ? '<p class="hint" style="margin-top:-4px">You paid <b class="num">'+money(costBasis(i))+'</b> a vial \u2014 landed, freight and fees in.'+
         (num(i.price) > 0 ? ' At '+money(num(i.price))+' that\'s <b class="num" style="color:var(--'+((num(i.price)-costBasis(i))<0?'alert':'ok')+')">'+money(num(i.price)-costBasis(i))+'</b> margin ('+Math.round(marginPct(costBasis(i), num(i.price)))+'%).' : '')+'</p>'
       : '<p class="hint" style="margin-top:-4px">No landed cost yet \u2014 it appears once stock is received against a purchase.</p>')+
+    (() => {
+      const vq = vendorOptions(i.id).sort((a,b) => a.per - b.per);
+      if(!vq.length) return '';
+      return '<div class="eyebrow" style="margin:12px 0 6px">Vendor quotes</div>'+
+        vq.map((v,ix) => {
+          const pIx = (v.sup.prices||[]).findIndex(x => x.itemId === i.id);
+          return '<button class="row" onclick="editPrice(\''+v.sup.id+'\','+pIx+')">'+
+            '<span class="nm"><b>'+esc(v.sup.name||"?")+'</b><small>'+
+              (v.cat?esc(v.cat)+' \u00b7 ':'')+money(v.kit)+'/kit'+
+              (v.lead?' \u00b7 ~'+v.lead+'d':'')+'</small></span>'+
+            '<span class="rt"><b>'+money(v.per)+'</b>'+(ix===0?'<span class="pill ok">cheapest</span>':'per vial')+'</span></button>';
+        }).join("");
+    })()+
     '<div class="grid2"><div class="field"><label>Scan code (base)</label><input id="e_code" value="'+esc(i.code)+'" autocapitalize="characters"></div>'+
     '<div class="field"><label>Bin location</label><input id="e_bin" value="'+esc(i.bin||"")+'" placeholder="A-01-3" autocapitalize="characters"></div></div>'+
     '<p class="hint" style="margin-top:-4px">Scanning <b class="num">'+esc(i.code||"CODE")+'-01</b> logs one vial; <b class="num">'+esc(i.code||"CODE")+'-10</b> logs ten.</p>'+
