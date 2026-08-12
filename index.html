@@ -334,7 +334,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260810-0900-d10359";
+const BUILD = "20260812-0841-703fe3";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -5806,6 +5806,47 @@ function weightLabel(g){
   if(oz < 16) return oz.toFixed(1) + " oz";
   return Math.floor(oz/16) + " lb " + (oz%16).toFixed(1) + " oz";
 }
+async function quoteRates(qid){
+  const q = S.quotes.find(x => x.id === qid); if(!q) return;
+  saveQuote();                       // capture typed fields, incl. the customer
+  const box = $("q_rates"); if(!box) return;
+  if(!S.settings.rateUrl){ carrierSetupSheet(); return; }
+  const cust = S.customers.find(c => c.id === q.customerId);
+  if(!cust || !(cust.zip||"").trim()){
+    box.innerHTML = '<p class="hint">Pick a customer with a ZIP on file \u2014 rates need a destination.</p>'; return;
+  }
+  if(!(q.lines||[]).length){
+    box.innerHTML = '<p class="hint">Add the products first \u2014 rates need a weight.</p>'; return;
+  }
+  const p = parcelFor(q);            // default box + item weights
+  box.innerHTML = '<p class="hint">Asking your carriers\u2026</p>';
+  try{
+    const res = await fetch(S.settings.rateUrl, {
+      method:"POST",
+      headers:{"Content-Type":"application/json","X-ITLOps-Key":S.settings.rateKey||""},
+      body: JSON.stringify({
+        from:{city:S.settings.fromCity||"", state:S.settings.fromState||"", postal_code:S.settings.fromZip||"", country:"US"},
+        to:{city:cust.city||"", state:cust.state||"", postal_code:cust.zip||"", country:"US", residential:true},
+        parcel:{length:p.length, width:p.width, height:p.height, weight_oz:+p.oz.toFixed(2)},
+        carriers: activeCarriers()
+      })
+    });
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const data = await res.json();
+    const rates = (data.rates||[]).slice().sort((a,b) => num(a.amount)-num(b.amount));
+    const errs = data.errors || {};
+    const notes = Object.keys(errs).map(c =>
+      '<p class="hint" style="color:var(--alert);margin:2px 0">'+esc(c.toUpperCase())+' \u2014 '+esc(String(errs[c]))+'</p>').join("");
+    if(!rates.length){ box.innerHTML = notes || '<p class="hint">No rates came back.</p>'; return; }
+    box.innerHTML = rates.slice(0,5).map(r =>
+      '<button class="row" onclick="$(\'q_ship\').value='+num(r.amount).toFixed(2)+';saveQuote();$(\'q_rates\').innerHTML=\'\';toast(\'Shipping set\')">'+
+        '<span class="nm"><b>'+esc(r.carrier||"")+'</b><small>'+esc(r.service||"")+'</small></span>'+
+        '<span class="rt"><b>'+money(num(r.amount))+'</b>tap to use</span></button>').join("") + notes +
+      '<p class="hint">'+(p.grams|0)+' g estimated \u00b7 default box \u00b7 tap a rate to fill Shipping charged</p>';
+  }catch(e){
+    box.innerHTML = '<p class="hint" style="color:var(--alert)">Rates failed \u2014 '+esc(e.message)+'</p>';
+  }
+}
 async function fetchRates(oid){
   const o = S.orders.find(x => x.id === oid); if(!o) return;
   const box = $("rates_box"); if(!box) return;
@@ -6311,7 +6352,9 @@ function openQuote(id){
     '<div class="field"><label>&#8203;</label><button class="btn full" onclick="applyQuoteMult()">Price all at list \u2212 %</button></div></div>'+
     '<p class="hint" style="margin-top:-6px">Stocked lines use true landed cost \u2014 goods, freight, and Coinbase fees are already inside the per-vial number, so the percentage sits on top of the true number automatically. Estimated lines (no stock) are bare vendor prices; treat those margins as ceilings.</p>'+
     '<div class="grid2" style="margin-top:10px"><div class="field"><label>Shipping charged</label><input id="q_ship" type="number" step="any" value="'+num(q.shipCharged)+'"></div>'+
-    '<div class="field"><label>Valid for (days)</label><input id="q_valid" type="number" value="'+(num(q.validDays)||7)+'"></div></div>'+
+    '<div class="field"><label>&#8203;</label><button class="btn full" onclick="quoteRates(\''+q.id+'\')">Quote shipping</button></div></div>'+
+    '<div id="q_rates"></div>'+
+    '<div class="field"><label>Valid for (days)</label><input id="q_valid" type="number" value="'+(num(q.validDays)||7)+'"></div>'+
     '<div class="rcells" style="border:1px solid var(--line);border-radius:4px;margin-bottom:10px">'+
       '<div><div class="k">Quote</div><div class="v">'+money(t.rev)+'</div></div>'+
       '<div><div class="k">'+(t.estimated?'Cost est.':'Your cost')+'</div><div class="v">'+money(t.cost)+'</div></div>'+
