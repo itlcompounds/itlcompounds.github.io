@@ -334,7 +334,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260812-0841-703fe3";
+const BUILD = "20260812-1249-41fc52";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -6552,11 +6552,7 @@ function quoteToOrder(){
   else toast(o.ref+" created from "+(q.ref||"the quote")+" \u2014 stock committed");
   openOrder(o.id);
 }
-function renderQuotes(){
-  const el = $("quoteList"); if(!el) return;
-  if(!S.quotes.length){ el.innerHTML = ""; return; }
-  el.innerHTML = '<div class="eyebrow" style="margin:18px 0 8px"><span>Quotes</span></div>' +
-    S.quotes.slice().reverse().map(q => {
+function quoteRow(q){
       const t = quoteTotals(q), c = S.customers.find(x => x.id === q.customerId);
       const age = Math.floor((Date.now()-num(q.created))/86400000);
       const dead = num(q.validDays) && age > num(q.validDays);
@@ -6567,7 +6563,24 @@ function renderQuotes(){
          : q.status === "ordered" ? '<span style="color:var(--brand)">→ order placed</span>'
          : dead ? '<span style="color:var(--alert)">expired</span>' : 'day '+age)+'</small></span>'+
         '<span class="rt"><b>'+money(t.rev)+'</b>'+t.margin.toFixed(0)+'% margin</span></button>';
-    }).join("");
+}
+function closedQuotesSheet(){
+  const won = S.quotes.filter(q => q.status === "won").slice().reverse();
+  sheet('<h2>Closed quotes</h2>'+
+    (won.length ? won.map(quoteRow).join("") : '<p class="hint">Nothing closed yet.</p>')+
+    '<div class="sheetact"><button class="btn pri" onclick="closeSheet()">Done</button></div>');
+}
+function renderQuotes(){
+  const el = $("quoteList"); if(!el) return;
+  if(!S.quotes.length){ el.innerHTML = ""; return; }
+  // A won quote's story continues on its order — it leaves this list the way
+  // completed orders leave theirs, into a drawer, instead of lingering as
+  // "closed" clutter above live quotes.
+  const won = S.quotes.filter(q => q.status === "won");
+  const live = S.quotes.filter(q => q.status !== "won");
+  el.innerHTML = '<div class="eyebrow" style="margin:18px 0 8px"><span>Quotes</span></div>' +
+    live.slice().reverse().map(quoteRow).join("") +
+    (won.length ? '<button class="row" onclick="closedQuotesSheet()"><span class="nm"><b>Closed · '+won.length+'</b><small>won quotes, archived</small></span><span class="rt"></span></button>' : '');
 }
 
 /* ============ print queue ============ */
