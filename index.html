@@ -336,7 +336,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260814-1257-128ab4";
+const BUILD = "20260817-0104-28df4d";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4109,6 +4109,128 @@ function saveNewItem(){
 }
 
 let curItem = null;
+/* ============ assembled products ============ */
+/*
+ * A product built from other stock — two peptides into a nasal sprayer, say.
+ * The recipe lives on the product: which stock items and how many per unit,
+ * which supplies and how many per unit. Making a batch draws the ingredients
+ * out (FIFO, at landed cost, into a Production order so the ledger and
+ * shelf agree), decrements the supplies, and creates the finished lot with
+ * every input's cost rolled into it. One action, and the numbers are right.
+ */
+function nextLotCode(){
+  // L-YYMMDD-n, matching received lots; n counts today's lots so two batches
+  // in a day don't collide.
+  const stamp = new Date().toISOString().slice(2,10).replace(/-/g,"");
+  const today = S.lots.filter(l => (l.code||"").startsWith("L-"+stamp)).length;
+  return "L-"+stamp+"-"+(today+1);
+}
+function productionOrder(){
+  let o = S.orders.find(x => x.production && x.status !== "done");
+  if(!o){
+    o = {id:uid("o"), ref:"Production", created:Date.now(), status:"open", lines:[],
+         production:true, noCharge:true, paidAt:Date.now(), customerId:"", carrier:"", tracking:""};
+    S.orders.push(o);
+  }
+  return o;
+}
+function assembleSheet(itemId){
+  const i = S.items.find(x => x.id === itemId); if(!i) return;
+  const r = i.recipe || {items:[], supplies:[]};
+  const itemOpts = sel => '<option value="">— pick —</option>' + S.items.filter(x => x.id !== i.id && !x.kind)
+    .sort((a,b)=>(a.name||"").localeCompare(b.name||""))
+    .map(x => '<option value="'+x.id+'"'+(x.id===sel?' selected':'')+'>'+esc(x.name)+' ('+num(x.qty)+' on hand)</option>').join("");
+  const supOpts = sel => '<option value="">— pick —</option>' + S.supplies
+    .map(x => '<option value="'+x.id+'"'+(x.id===sel?' selected':'')+'>'+esc(x.name)+' ('+num(x.qty)+' '+esc(x.unit||"")+')</option>').join("");
+  const rows = (list, kind) => list.map((ln,ix) =>
+    '<div class="grid2" style="margin-bottom:6px"><div class="field"><select id="as_'+kind+'_'+ix+'">'+(kind==="i"?itemOpts(ln.id):supOpts(ln.id))+'</select></div>'+
+    '<div class="field"><input id="as_'+kind+'q_'+ix+'" type="number" step="any" inputmode="decimal" value="'+num(ln.per)+'" placeholder="per unit"></div></div>').join("");
+  const its = r.items.length ? r.items : [{id:"",per:1},{id:"",per:1}];
+  const sps = r.supplies.length ? r.supplies : [{id:"",per:1},{id:"",per:1}];
+  sheet('<h2>'+esc(i.name)+' \u2014 assembled</h2>'+
+    '<p class="hint" style="margin-top:-6px">What goes into <b>one</b> finished unit. Making a batch draws these from stock at landed cost and builds the finished lot from them.</p>'+
+    '<div class="eyebrow" style="margin:10px 0 6px">Stock items per unit</div>'+rows(its,"i")+
+    '<div class="eyebrow" style="margin:10px 0 6px">Supplies per unit</div>'+rows(sps,"s")+
+    '<p class="hint">Fractions are fine \u2014 5 mL from a 500 mL saline bottle is 0.01 per unit.</p>'+
+    '<div class="grid2" style="margin-top:12px"><div class="field"><label>Batch size</label><input id="as_n" type="number" inputmode="numeric" value="'+(num(r.lastBatch)||10)+'"></div>'+
+    '<div class="field"><label>Lot code</label><input id="as_lot" value="'+esc(nextLotCode())+'"></div></div>'+
+    '<div id="as_preview"></div>'+
+    '<div class="sheetact"><button class="btn" onclick="saveRecipe(\''+i.id+'\');closeSheet()">Save recipe only</button>'+
+    '<button class="btn pri" onclick="makeBatch(\''+i.id+'\')">Make the batch</button></div>');
+  const prev = () => { const p = $("as_preview"); if(p) p.innerHTML = batchPreview(i.id); };
+  ["as_n","as_i_0","as_i_1","as_iq_0","as_iq_1","as_s_0","as_s_1","as_sq_0","as_sq_1"].forEach(id => { const e=$(id); if(e) e.addEventListener("input", prev); });
+  prev();
+}
+function readRecipe(){
+  const items = [], supplies = [];
+  for(let ix=0; ix<8; ix++){
+    const ie = $("as_i_"+ix), iq = $("as_iq_"+ix);
+    if(ie && ie.value && num(iq&&iq.value) > 0) items.push({id:ie.value, per:num(iq.value)});
+    const se = $("as_s_"+ix), sq = $("as_sq_"+ix);
+    if(se && se.value && num(sq&&sq.value) > 0) supplies.push({id:se.value, per:num(sq.value)});
+  }
+  return {items, supplies, lastBatch:num($("as_n")&&$("as_n").value)||10};
+}
+function saveRecipe(itemId){
+  const i = S.items.find(x => x.id === itemId); if(!i) return;
+  i.recipe = readRecipe(); save(); renderAll(); toast("Recipe saved");
+}
+function batchCost(itemId, n, r){
+  let peptide = 0, supply = 0, short = [];
+  r.items.forEach(ln => {
+    const it = S.items.find(x => x.id === ln.id); if(!it) return;
+    const need = ln.per * n;
+    if(num(it.qty) < need) short.push(it.name+" (need "+need+", have "+num(it.qty)+")");
+    peptide += need * unitCost(it.id);
+  });
+  r.supplies.forEach(ln => {
+    const s = S.supplies.find(x => x.id === ln.id); if(!s) return;
+    const need = ln.per * n;
+    if(num(s.qty) < need) short.push(s.name+" (need "+need+", have "+num(s.qty)+")");
+    supply += need * num(s.cost);
+  });
+  return {peptide, supply, total: peptide+supply, per: n>0 ? (peptide+supply)/n : 0, short};
+}
+function batchPreview(itemId){
+  const r = readRecipe(), n = num($("as_n")&&$("as_n").value)||0;
+  if(!n || (!r.items.length && !r.supplies.length)) return "";
+  const b = batchCost(itemId, n, r);
+  return '<div class="cells" style="margin-top:8px">'+
+    '<div><div class="k">Peptides</div><div class="v">'+money(b.peptide)+'</div></div>'+
+    '<div><div class="k">Supplies</div><div class="v">'+money(b.supply)+'</div></div>'+
+    '<div><div class="k">Per unit</div><div class="v" style="color:var(--brand)">'+money(b.per)+'</div></div></div>'+
+    (b.short.length ? '<p class="hint" style="color:var(--alert)">Short: '+esc(b.short.join("; "))+'</p>' : '');
+}
+function makeBatch(itemId){
+  const i = S.items.find(x => x.id === itemId); if(!i) return;
+  const r = readRecipe(), n = num($("as_n").value);
+  if(!n || n < 1){ toast("Batch size?"); return; }
+  if(!r.items.length && !r.supplies.length){ toast("Add at least one ingredient"); return; }
+  const b = batchCost(itemId, n, r);
+  if(b.short.length){ toast("Not enough on hand \u2014 " + b.short[0]); return; }
+  i.recipe = r;
+  const prod = productionOrder();
+  // draw ingredients: FIFO at landed cost, $0 sale into the Production order
+  r.items.forEach(ln => {
+    const it = S.items.find(x => x.id === ln.id); if(!it) return;
+    const need = ln.per * n;
+    moveOut(it, need, prod.id, 1, 0);
+    prod.lines.push({itemId:it.id, qty:need, price:0, note:"\u2192 "+i.name+" \u00d7 "+n});
+  });
+  r.supplies.forEach(ln => {
+    const s = S.supplies.find(x => x.id === ln.id); if(!s) return;
+    s.qty = Math.max(0, num(s.qty) - ln.per * n);
+  });
+  // the finished lot: peptides as product cost, supplies as "anything else"
+  const lot = {id:uid("l"), itemId:i.id, code:($("as_lot").value.trim()||nextLotCode()), created:Date.now(),
+               received:Date.now(), vials:n, remaining:n, product:+b.peptide.toFixed(2), other:+b.supply.toFixed(2),
+               freight:0, fees:0, customs:0, labels:0, supplierId:"", assembled:true};
+  S.lots.push(lot);
+  i.qty = num(i.qty) + n;
+  save(); renderAll(); closeSheet();
+  toast(n+" \u00d7 "+i.name+" made \u2014 "+money(b.per)+" each");
+  openItem(i.id);
+}
 function recordSaleSheet(itemId){
   const i = S.items.find(x => x.id === itemId); if(!i) return;
   sheet('<h2>Record a past sale</h2>'+
@@ -4196,6 +4318,7 @@ function openItem(id){
     '<div class="field"><label>Weight each (g) — used for shipping rates</label><input id="e_wt" type="number" step="any" value="'+(num(i.weight)||"")+'" placeholder="vial + packaging"></div>'+
     '<button class="btn full" style="margin-bottom:10px;border-color:#28503A;color:var(--ok)" onclick="messageSheet(\''+(i.supplierId||"")+'\',[S.items.find(x=>x.id===\''+i.id+'\')])">WhatsApp a restock request</button>'+
     '<button class="btn full" style="margin-bottom:10px" onclick="recordSaleSheet(\''+i.id+'\')">Record a past sale</button>'+
+    '<button class="btn full" style="margin-bottom:10px" onclick="assembleSheet(\''+i.id+'\')">'+((i.recipe&&i.recipe.length)?'Make a batch':'Set up as an assembled product')+'</button>'+
     (soldPerDay(i.id) > 0 || num(i.qty) > 0
       ? (() => { const d = demandRow(i);
           return '<p class="hint" style="margin-top:6px">'+
