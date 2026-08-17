@@ -336,7 +336,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260817-0104-28df4d";
+const BUILD = "20260817-0128-50dd13";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4145,20 +4145,25 @@ function assembleSheet(itemId){
   const rows = (list, kind) => list.map((ln,ix) =>
     '<div class="grid2" style="margin-bottom:6px"><div class="field"><select id="as_'+kind+'_'+ix+'">'+(kind==="i"?itemOpts(ln.id):supOpts(ln.id))+'</select></div>'+
     '<div class="field"><input id="as_'+kind+'q_'+ix+'" type="number" step="any" inputmode="decimal" value="'+num(ln.per)+'" placeholder="per unit"></div></div>').join("");
-  const its = r.items.length ? r.items : [{id:"",per:1},{id:"",per:1}];
-  const sps = r.supplies.length ? r.supplies : [{id:"",per:1},{id:"",per:1}];
+  // Show every saved line plus one empty row, so there is always room for
+  // another ingredient without a separate "add" button.
+  const pad = (list, n) => { const out = list.slice(0, 8); while(out.length < Math.min(8, Math.max(n, list.length + 1))) out.push({id:"",per:1}); return out; };
+  const its = pad(r.items, 2);
+  const sps = pad(r.supplies, 2);
   sheet('<h2>'+esc(i.name)+' \u2014 assembled</h2>'+
     '<p class="hint" style="margin-top:-6px">What goes into <b>one</b> finished unit. Making a batch draws these from stock at landed cost and builds the finished lot from them.</p>'+
     '<div class="eyebrow" style="margin:10px 0 6px">Stock items per unit</div>'+rows(its,"i")+
     '<div class="eyebrow" style="margin:10px 0 6px">Supplies per unit</div>'+rows(sps,"s")+
-    '<p class="hint">Fractions are fine \u2014 5 mL from a 500 mL saline bottle is 0.01 per unit.</p>'+
+    '<p class="hint">Amounts are in each supply\'s own unit \u2014 5 mL of saline is 5 when the supply is counted in mL. Fill the last row and another appears when you reopen.</p>'+
     '<div class="grid2" style="margin-top:12px"><div class="field"><label>Batch size</label><input id="as_n" type="number" inputmode="numeric" value="'+(num(r.lastBatch)||10)+'"></div>'+
     '<div class="field"><label>Lot code</label><input id="as_lot" value="'+esc(nextLotCode())+'"></div></div>'+
     '<div id="as_preview"></div>'+
     '<div class="sheetact"><button class="btn" onclick="saveRecipe(\''+i.id+'\');closeSheet()">Save recipe only</button>'+
     '<button class="btn pri" onclick="makeBatch(\''+i.id+'\')">Make the batch</button></div>');
   const prev = () => { const p = $("as_preview"); if(p) p.innerHTML = batchPreview(i.id); };
-  ["as_n","as_i_0","as_i_1","as_iq_0","as_iq_1","as_s_0","as_s_1","as_sq_0","as_sq_1"].forEach(id => { const e=$(id); if(e) e.addEventListener("input", prev); });
+  const ids = ["as_n"];
+  for(let ix=0; ix<8; ix++) ids.push("as_i_"+ix,"as_iq_"+ix,"as_s_"+ix,"as_sq_"+ix);
+  ids.forEach(id => { const e=$(id); if(e) e.addEventListener("input", prev); });
   prev();
 }
 function readRecipe(){
