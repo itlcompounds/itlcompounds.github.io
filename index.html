@@ -336,7 +336,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260817-0242-1fa705";
+const BUILD = "20260817-0247-44fc25";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -6115,11 +6115,11 @@ function carrierOn(c){
   return !Array.isArray(list) ? true : list.indexOf(c) !== -1;
 }
 function activeCarriers(){
-  return ["fedex","ups","usps"].filter(carrierOn);
+  return ["fedex","usps"].filter(carrierOn);
 }
 function carrierSetupSheet(){
   sheet('<h2>Carrier setup</h2>'+
-    '<p class="hint" style="margin-top:-6px">FedEx and UPS both block direct calls from a web page, and putting your API secret in this file would let anyone holding it ship on your account. So the credentials live on a small endpoint of yours, and ITL Ops calls that.</p>'+
+    '<p class="hint" style="margin-top:-6px">FedEx and USPS both block direct calls from a web page, and putting your API secret in this file would let anyone holding it ship on your account. So the credentials live on a small endpoint of yours, and ITL Ops calls that.</p>'+
     '<div class="field"><label>Rate endpoint URL</label><input id="cs_url" value="'+esc(S.settings.rateUrl||"")+'" placeholder="https://rates.yourdomain.workers.dev"></div>'+
     '<div class="field"><label>Shared key</label><input id="cs_key" value="'+esc(S.settings.rateKey||"")+'" placeholder="A password you set on the endpoint"></div>'+
     '<div class="eyebrow" style="margin:14px 0 6px">Ship-from address</div>'+
@@ -6134,7 +6134,7 @@ function carrierSetupSheet(){
     '<p class="hint" style="margin-top:-4px">A seized parcel is a total loss with crypto payment, so large single shipments concentrate risk.</p>'+
     '<div class="eyebrow" style="margin:14px 0 6px">Ask these carriers</div>'+
     '<div class="modebar" style="grid-template-columns:1fr 1fr 1fr" role="group">'+
-      ["fedex","ups","usps"].map(c => '<button type="button" class="cs-carrier" data-c="'+c+'" aria-pressed="'+
+      ["fedex","usps"].map(c => '<button type="button" class="cs-carrier" data-c="'+c+'" aria-pressed="'+
         (carrierOn(c)?"true":"false")+'">'+c.toUpperCase()+'</button>').join("")+
     '</div>'+
     '<div class="sheetact"><button class="btn" onclick="closeSheet()">Cancel</button>'+
