@@ -336,7 +336,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260817-0128-50dd13";
+const BUILD = "20260817-0139-407f3e";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -642,6 +642,14 @@ function moveIn(item, qty, lotId){
 }
 // FIFO: pull from the oldest lot with stock so cost of goods matches what you actually shipped
 function moveOut(item, qty, orderId, packQty, sellOverride){
+  // Make-to-order: an assembled product with makeToOrder set is built the
+  // moment it sells. Whatever isn't already on the shelf gets made now —
+  // ingredients drawn, supplies decremented, lot landed — then sold as
+  // normal, so the physical "make it when ordered" and the books agree.
+  if(item.makeToOrder && item.recipe && num(item.qty) < qty){
+    const short = qty - num(item.qty);
+    if(!makeBatchQuiet(item, short)) return false;
+  }
   if(num(item.qty) < qty) return false;
   // Whatever the buyer's tier is, that is the revenue actually earned — and
   // for friends it also depends on whether this went out as a kit. A caller
@@ -4155,6 +4163,11 @@ function assembleSheet(itemId){
     '<div class="eyebrow" style="margin:10px 0 6px">Stock items per unit</div>'+rows(its,"i")+
     '<div class="eyebrow" style="margin:10px 0 6px">Supplies per unit</div>'+rows(sps,"s")+
     '<p class="hint">Amounts are in each supply\'s own unit \u2014 5 mL of saline is 5 when the supply is counted in mL. Fill the last row and another appears when you reopen.</p>'+
+    '<div class="eyebrow" style="margin:12px 0 6px">When is it made?</div>'+
+    '<div class="modebar" style="grid-template-columns:1fr 1fr;margin-bottom:6px">'+
+      '<button type="button" id="as_mto0" aria-pressed="'+(!i.makeToOrder)+'" onclick="setMTO(\''+i.id+'\',0)">In batches, ahead</button>'+
+      '<button type="button" id="as_mto1" aria-pressed="'+(!!i.makeToOrder)+'" onclick="setMTO(\''+i.id+'\',1)">As each one sells</button></div>'+
+    '<p class="hint" style="margin-top:0">As each one sells: adding it to an order or scanning it builds it right then \u2014 vials, sprayer and saline come out, the finished unit lands, and it sells. Nothing sits made on the shelf.</p>'+
     '<div class="grid2" style="margin-top:12px"><div class="field"><label>Batch size</label><input id="as_n" type="number" inputmode="numeric" value="'+(num(r.lastBatch)||10)+'"></div>'+
     '<div class="field"><label>Lot code</label><input id="as_lot" value="'+esc(nextLotCode())+'"></div></div>'+
     '<div id="as_preview"></div>'+
@@ -4165,6 +4178,13 @@ function assembleSheet(itemId){
   for(let ix=0; ix<8; ix++) ids.push("as_i_"+ix,"as_iq_"+ix,"as_s_"+ix,"as_sq_"+ix);
   ids.forEach(id => { const e=$(id); if(e) e.addEventListener("input", prev); });
   prev();
+}
+function setMTO(itemId, v){
+  const i = S.items.find(x => x.id === itemId); if(!i) return;
+  i.recipe = readRecipe(); i.makeToOrder = !!v; save();
+  const a=$("as_mto0"), b=$("as_mto1");
+  if(a) a.setAttribute("aria-pressed", String(!v)); if(b) b.setAttribute("aria-pressed", String(!!v));
+  toast(v ? "Made as each one sells" : "Made in batches");
 }
 function readRecipe(){
   const items = [], supplies = [];
@@ -4205,6 +4225,28 @@ function batchPreview(itemId){
     '<div><div class="k">Supplies</div><div class="v">'+money(b.supply)+'</div></div>'+
     '<div><div class="k">Per unit</div><div class="v" style="color:var(--brand)">'+money(b.per)+'</div></div></div>'+
     (b.short.length ? '<p class="hint" style="color:var(--alert)">Short: '+esc(b.short.join("; "))+'</p>' : '');
+}
+function makeBatchQuiet(i, n){
+  const r = i.recipe; if(!r || !n || n < 1) return false;
+  const b = batchCost(i.id, n, r);
+  if(b.short.length){ toast("Can\u2019t make "+i.name+" \u2014 "+b.short[0]); return false; }
+  const prod = productionOrder();
+  r.items.forEach(ln => {
+    const it = S.items.find(x => x.id === ln.id); if(!it) return;
+    const need = ln.per * n;
+    moveOut(it, need, prod.id, 1, 0);
+    prod.lines.push({itemId:it.id, qty:need, price:0, note:"\u2192 "+i.name+" \u00d7 "+n});
+  });
+  r.supplies.forEach(ln => {
+    const s = S.supplies.find(x => x.id === ln.id); if(!s) return;
+    s.qty = Math.max(0, num(s.qty) - ln.per * n);
+  });
+  S.lots.push({id:uid("l"), itemId:i.id, code:nextLotCode(), created:Date.now(), received:Date.now(),
+               vials:n, remaining:n, product:+b.peptide.toFixed(2), other:+b.supply.toFixed(2),
+               freight:0, fees:0, customs:0, labels:0, supplierId:"", assembled:true});
+  i.qty = num(i.qty) + n;
+  toast("Made "+n+" \u00d7 "+i.name+" for this order \u2014 "+money(b.per)+" each");
+  return true;
 }
 function makeBatch(itemId){
   const i = S.items.find(x => x.id === itemId); if(!i) return;
@@ -5332,7 +5374,7 @@ function orderAddSheet(orderId, filter){
     const listP = priceFor(i, tier, 1, o.customerId);
     const sell = listP;
     const v = prev[i.id] || "0";
-    const out = num(i.qty) <= 0;
+    const out = num(i.qty) <= 0 && !(i.makeToOrder && i.recipe);
     const pv = prevP[i.id] != null ? prevP[i.id] : (sell > 0 ? sell : "");
     const lbl = t => '<small style="display:block;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-align:center;margin-bottom:2px">'+t+'</small>';
     return '<div class="row'+(num(v)>0?' po_row_active':'')+' po_row" id="oar_'+i.id+'">'+
