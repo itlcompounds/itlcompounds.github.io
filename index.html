@@ -336,7 +336,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260817-0139-407f3e";
+const BUILD = "20260817-0242-1fa705";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -5978,6 +5978,24 @@ function weightLabel(g){
   if(oz < 16) return oz.toFixed(1) + " oz";
   return Math.floor(oz/16) + " lb " + (oz%16).toFixed(1) + " oz";
 }
+function shortlistRates(rates){
+  // Per carrier: the two cheapest and the two fastest, deduped and tagged.
+  // The overall cheapest sits at the top. Answers "cheapest?" and "how fast?"
+  // without scrolling a dozen near-identical services.
+  const byC = {};
+  rates.forEach(r => (byC[r.carrier] = byC[r.carrier] || []).push(r));
+  const out = [];
+  Object.keys(byC).forEach(c => {
+    const list = byC[c];
+    const cheap = list.slice().sort((a,b) => num(a.amount)-num(b.amount)).slice(0,2);
+    const fast  = list.filter(r => r.days).sort((a,b) => a.days-b.days || num(a.amount)-num(b.amount)).slice(0,2);
+    const seen = new Set();
+    cheap.forEach(r => { seen.add(r); r._tag = "cheapest"; out.push(r); });
+    fast.forEach(r => { if(seen.has(r)){ r._tag = "cheapest \u00b7 fastest"; return; } r._tag = "fastest"; out.push(r); });
+  });
+  out.sort((a,b) => num(a.amount)-num(b.amount));
+  return out;
+}
 async function quoteRates(qid){
   const q = S.quotes.find(x => x.id === qid); if(!q) return;
   saveQuote();                       // capture typed fields, incl. the customer
@@ -6010,9 +6028,10 @@ async function quoteRates(qid){
     const notes = Object.keys(errs).map(c =>
       '<p class="hint" style="color:var(--alert);margin:2px 0">'+esc(c.toUpperCase())+' \u2014 '+esc(String(errs[c]))+'</p>').join("");
     if(!rates.length){ box.innerHTML = notes || '<p class="hint">No rates came back.</p>'; return; }
-    box.innerHTML = rates.slice(0,5).map(r =>
+    box.innerHTML = shortlistRates(rates).map(r =>
       '<button class="row" onclick="$(\'q_ship\').value='+num(r.amount).toFixed(2)+';saveQuote();$(\'q_rates\').innerHTML=\'\';toast(\'Shipping set\')">'+
-        '<span class="nm"><b>'+esc(r.carrier||"")+'</b><small>'+esc(r.service||"")+'</small></span>'+
+        '<span class="nm"><b>'+esc(r.carrier||"")+' '+esc(r.service_name||r.service||"")+'</b><small>'+
+          (r.days ? r.days+' day'+(r.days==1?'':'s') : 'transit n/a')+' \u00b7 '+esc(r._tag||'')+'</small></span>'+
         '<span class="rt"><b>'+money(num(r.amount))+'</b>tap to use</span></button>').join("") + notes +
       '<p class="hint">'+(p.grams|0)+' g estimated \u00b7 default box \u00b7 tap a rate to fill Shipping charged</p>';
   }catch(e){
@@ -6061,14 +6080,15 @@ async function fetchRates(oid){
         '<p class="hint">No rates came back. Check the ship-from ZIP in Setup and the ZIP on this order.</p>';
       return;
     }
-    box.innerHTML = rates.map((r,ix) => {
+    const shown = shortlistRates(rates);
+    box.innerHTML = shown.map((r,ix) => {
       const chosen = o.service === r.service && o.carrier === r.carrier;
       return '<button class="row'+(chosen?' low':'')+'" style="'+(chosen?'border-left-color:var(--ok)':'')+'" onclick="pickRate(\''+oid+'\','+ix+')">'+
         '<span class="nm"><b>'+esc(r.carrier)+' '+esc(r.service_name||r.service||"")+'</b>'+
-        '<small>'+(r.days ? r.days + " day" + (r.days==1?"":"s") : "transit n/a")+(ix===0?' · cheapest':'')+'</small></span>'+
+        '<small>'+(r.days ? r.days + " day" + (r.days==1?"":"s") : "transit n/a")+' \u00b7 '+esc(r._tag||'')+'</small></span>'+
         '<span class="rt"><b style="color:'+(ix===0?'var(--ok)':'var(--frost)')+'">'+money(num(r.amount))+'</b>'+(chosen?'selected':'')+'</span></button>';
     }).join("") + notes;
-    window.__rates = rates;
+    window.__rates = shown;
   }catch(e){
     box.innerHTML = e.answered
       ? '<p class="hint" style="color:var(--alert)">The rate endpoint refused this request: '+esc(e.message)+'<br>'+
