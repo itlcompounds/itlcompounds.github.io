@@ -336,7 +336,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260817-0247-44fc25";
+const BUILD = "20260818-0648-3a13b3";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -3831,7 +3831,14 @@ function renderStock(){
                                  (i.code||"").toLowerCase().includes(sf) ||
                                  (i.bin||"").toLowerCase().includes(sf));
   const sorted = pool.slice().sort((a,b) => {
-    if(mode === "low") return (num(a.qty)-num(a.reorder)) - (num(b.qty)-num(b.reorder));
+    if(mode === "low"){
+      // Products at or under their reorder point float up, most urgent first;
+      // everything comfortably stocked reads alphabetically after them.
+      const la = num(a.qty) <= num(a.reorder), lb = num(b.qty) <= num(b.reorder);
+      if(la !== lb) return la ? -1 : 1;
+      if(la && lb) return (num(a.qty)-num(a.reorder)) - (num(b.qty)-num(b.reorder));
+      return String(a.name||"").localeCompare(String(b.name||""), undefined, {numeric:true});
+    }
     if(mode === "bin") return String(a.bin||"~~~").localeCompare(String(b.bin||"~~~"));
     return String(a.name||"").localeCompare(String(b.name||""), undefined, {numeric:true});
   });
