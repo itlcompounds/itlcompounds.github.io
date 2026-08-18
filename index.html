@@ -336,7 +336,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260818-0705-545b69";
+const BUILD = "20260818-0711-a85700";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -694,6 +694,24 @@ function findThing(id){
   return S.items.find(x => x.id === id) || S.supplies.find(x => x.id === id) || null;
 }
 // Draw down every supply of a given kind. Silent unless it tips into reorder.
+// Which label roll a lot draws from is chosen on the lot itself, so two
+// rolls in service never both get hit. Blank = don't touch any roll.
+function labelSupplyOptions(sel){
+  const rolls = S.supplies.filter(s => s.kind === "vial-label");
+  if(!rolls.length) return "";
+  return '<div class="field"><label>Label roll to draw from</label><select id="l_lblsup">'+
+    '<option value="">\u2014 none \u2014</option>'+
+    rolls.map(s => '<option value="'+s.id+'"'+(s.id===sel?' selected':'')+'>'+esc(s.name)+' ('+num(s.qty)+' left)</option>').join("")+
+    '</select></div>';
+}
+function consumeFrom(supplyId, n){
+  const s = supplyId && S.supplies.find(x => x.id === supplyId);
+  if(!s || !n || n <= 0) return;
+  const before = num(s.qty);
+  s.qty = Math.max(0, before - n);
+  if(before > num(s.reorder) && s.qty <= num(s.reorder))
+    setTimeout(() => toast(s.name + " is down to " + num(s.qty) + " \u2014 reorder"), 400);
+}
 function consume(kind, n){
   if(!n || n <= 0) return;
   let tipped = null;
@@ -2079,7 +2097,7 @@ function receivePO(id){
     };
     S.lots.push(lot);
     if(it){ it.qty = num(it.qty) + vials; it.catalog = false; }
-    consume("vial-label", vials);
+    consumeFrom(S.settings.lastLabelSupply, vials);
     consume("ribbon", vials);
     made++;
   });
@@ -4252,7 +4270,7 @@ function makeBatchQuiet(i, n){
                vials:n, remaining:n, product:+b.peptide.toFixed(2), other:+b.supply.toFixed(2),
                freight:0, fees:0, customs:0, labels:0, supplierId:"", assembled:true});
   i.qty = num(i.qty) + n;
-  ["vial-label","ribbon"].forEach(k => consume(k, n));   // every finished unit gets a label
+  consumeFrom(S.settings.lastLabelSupply, n); consume("ribbon", n);   // every finished unit gets a label
   toast("Made "+n+" \u00d7 "+i.name+" for this order \u2014 "+money(b.per)+" each");
   return true;
 }
@@ -4282,7 +4300,7 @@ function makeBatch(itemId){
                freight:0, fees:0, customs:0, labels:0, supplierId:"", assembled:true};
   S.lots.push(lot);
   i.qty = num(i.qty) + n;
-  ["vial-label","ribbon"].forEach(k => consume(k, n));   // every finished unit gets a label
+  consumeFrom(S.settings.lastLabelSupply, n); consume("ribbon", n);   // every finished unit gets a label
   save(); renderAll(); closeSheet();
   toast(n+" \u00d7 "+i.name+" made \u2014 "+money(b.per)+" each");
   openItem(i.id);
@@ -5051,6 +5069,7 @@ function lotFields(l){
     '<input type="checkbox" id="l_legacy" style="width:auto"'+(l.legacy?' checked':'')+'> Pre-printed labels — no scannable code</label>'+
     '<div class="grid2"><div class="field"><label>Vials received</label><input id="l_vials" type="number" inputmode="numeric" value="'+num(l.vials)+'"></div>'+
     '<div class="field"><label>Still on shelf</label><input id="l_rem" type="number" inputmode="numeric" value="'+num(l.remaining)+'"></div></div>'+
+    labelSupplyOptions(l.labelSupplyId || S.settings.lastLabelSupply)+
     '<div class="costtot"><span>Landed <span id="l_tot">'+money(lotTotal(l))+'</span> ÷ vials</span><b id="l_unit">'+money(lotUnitCost(l))+'</b></div></div>';
 }
 function wireLotCalc(){
@@ -5172,6 +5191,7 @@ function readLot(l){
   l.purity = $("l_purity").value.trim();
   l.vials = num($("l_vials").value);
   l.remaining = num($("l_rem").value);
+  if($("l_lblsup")){ l.labelSupplyId = $("l_lblsup").value; S.settings.lastLabelSupply = l.labelSupplyId; }
   return l;
 }
 function saveNewLot(){
@@ -5187,7 +5207,8 @@ function saveNewLot(){
   // Vials arrive sealed and filled, so a lot only consumes what you apply to
   // the outside: one label and one ribbon print each.
   const received = num(l.vials);
-  ["vial-label","ribbon"].forEach(k => consume(k, received));
+  consumeFrom(l.labelSupplyId, received);
+  consume("ribbon", received);
   save(); closeSheet(); renderAll();
   toast(money(lotUnitCost(l)) + " per vial");
 }
