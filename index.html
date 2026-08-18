@@ -336,7 +336,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260818-0648-3a13b3";
+const BUILD = "20260818-0705-545b69";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4252,6 +4252,7 @@ function makeBatchQuiet(i, n){
                vials:n, remaining:n, product:+b.peptide.toFixed(2), other:+b.supply.toFixed(2),
                freight:0, fees:0, customs:0, labels:0, supplierId:"", assembled:true});
   i.qty = num(i.qty) + n;
+  ["vial-label","ribbon"].forEach(k => consume(k, n));   // every finished unit gets a label
   toast("Made "+n+" \u00d7 "+i.name+" for this order \u2014 "+money(b.per)+" each");
   return true;
 }
@@ -4281,6 +4282,7 @@ function makeBatch(itemId){
                freight:0, fees:0, customs:0, labels:0, supplierId:"", assembled:true};
   S.lots.push(lot);
   i.qty = num(i.qty) + n;
+  ["vial-label","ribbon"].forEach(k => consume(k, n));   // every finished unit gets a label
   save(); renderAll(); closeSheet();
   toast(n+" \u00d7 "+i.name+" made \u2014 "+money(b.per)+" each");
   openItem(i.id);
