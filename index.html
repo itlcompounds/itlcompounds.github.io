@@ -336,7 +336,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260818-0711-a85700";
+const BUILD = "20260821-2042-82845d";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1648,6 +1648,14 @@ function fromDateInput(v, fallback){
   if(p.length !== 3 || !p[0]) return fallback;
   return new Date(p[0], p[1]-1, p[2], 12, 0, 0).getTime();   // noon avoids DST edges
 }
+// How many sellable units come in one purchase unit. Peptides ship ten to a
+// kit; water, sprayers and anything bought by the case may not. Set per
+// product; blank means the usual ten.
+function packSize(itemId){
+  const i = S.items.find(x => x.id === itemId);
+  const n = num(i && i.perKit);
+  return n > 0 ? n : 10;
+}
 function poKits(po){ return po.lines.reduce((a,l) => a + num(l.kits), 0); }
 function poVials(po){ return poKits(po) * 10; }
 function poGoods(po){ return po.lines.reduce((a,l) => a + num(l.kits)*num(l.kitPrice), 0); }
@@ -1982,7 +1990,7 @@ function openPO(id){
   const lines = po.lines.map((l,i) => {
     const it = S.items.find(x => x.id === l.itemId);
     return '<div class="row"><span class="nm"><b>'+esc(it?it.name:"?")+'</b><small>'+
-      l.kits+' kit'+(l.kits===1?'':'s')+' × 10 = '+(l.kits*10)+' vials</small></span>'+
+      l.kits+' \u00d7 '+packSize(l.itemId)+' = '+(l.kits*packSize(l.itemId))+' units</small></span>'+
       '<span class="rt"><b>'+money(num(l.kits)*num(l.kitPrice))+'</b>'+money(num(l.kitPrice))+'/kit</span>'+
       '<button class="pill" style="margin-left:6px;flex:none;color:var(--alert)" onclick="removePOLine(\''+id+'\','+i+')">Remove</button></div>';
   }).join("");
@@ -2081,7 +2089,7 @@ function receivePO(id){
   let made = 0;
   po.lines.forEach((l, ix) => {
     const share = goods > 0 ? (num(l.kits)*num(l.kitPrice))/goods : 1/po.lines.length;
-    const vials = num(l.kits)*10;
+    const vials = num(l.kits) * packSize(l.itemId);
     const it = S.items.find(x => x.id === l.itemId);
     const lot = {
       id: uid("l"), date: po.receivedAt || Date.now(), itemId: l.itemId,
@@ -4360,6 +4368,8 @@ function openItem(id){
     '<div class="field"><label>Unit</label><select id="e_unit">'+
       ['mg','iu','mcg'].map(u=>'<option value="'+u+'"'+((i.unit||"mg")===u?' selected':'')+'>'+(u==='iu'?'IU':u)+'</option>').join("")+
     '</select></div>'+
+    '<div class="field"><label>Units per purchase unit \u2014 vials in a kit, bottles in a case</label>'+
+      '<input id="e_perkit" type="number" inputmode="numeric" value="'+(num(i.perKit)||10)+'"></div>'+
     '<div class="grid3"><div class="field"><label>Sales price \u2014 each</label><input id="e_price" type="number" step="any" value="'+num(i.price)+'"></div>'+
     '<div class="field"><label>On hand</label><input id="e_qty" type="number" value="'+num(i.qty)+'"></div>'+
     '<div class="field"><label>Reorder at</label><input id="e_re" type="number" value="'+num(i.reorder)+'"></div></div>'+
@@ -4444,6 +4454,7 @@ function setCatalog(id, v){
 function saveItem(id, quiet){
   const i = S.items.find(x => x.id === id); if(!i) return;
   i.name = $("e_name").value.trim() || i.name;
+  if($("e_perkit")) i.perKit = Math.max(1, num($("e_perkit").value) || 10);
   i.dose = $("e_dose").value.trim();
   if($("e_unit")) i.unit = $("e_unit").value;
   i.price = num($("e_price").value);
