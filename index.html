@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#12161A">
-<title>ITL Ops</title>
+<title>APB Ops</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="ITL Ops">
+<meta name="apple-mobile-web-app-title" content="APB Ops">
 <script>
 // Only over HTTPS, so opening the file locally still behaves normally.
 if('serviceWorker' in navigator && location.protocol === 'https:'){
@@ -30,10 +30,10 @@ if('serviceWorker' in navigator && location.protocol === 'https:'){
   --raise:#242A31;
   --line:#333A42;
   --frost:#E9ECEF;
-  --muted:#898989;      /* ITL grey, exact */
-  --brand:#3d97d3;      /* ITL blue, exact */
+  --muted:#898989;      /* APB grey, exact */
+  --brand:#3d97d3;      /* APB blue, exact */
   --brand-dim:#245A7E;
-  --ok:#4eba6f;         /* ITL green, exact */
+  --ok:#4eba6f;         /* APB green, exact */
   --alert:#E2574F;
   --cond:"IBM Plex Sans Condensed",'Arial Narrow',system-ui,sans-serif;
   --body:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
@@ -210,7 +210,7 @@ input[type=file]{padding:8px;font-size:13px}
 
 <header>
   <div class="brand">
-    <h1><span>ITL</span> Ops</h1>
+    <h1><span>APB</span> Ops</h1>
     <span style="display:flex;align-items:center;gap:10px">
       <span id="tempChip" class="eyebrow" style="letter-spacing:.1em;display:none;cursor:pointer"></span>
       <span id="syncState" class="eyebrow" style="letter-spacing:.1em"></span>
@@ -336,7 +336,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260822-0009-7f05c6";
+const BUILD = "20260822-0613-d38441";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -458,6 +458,48 @@ function saveLocal(){
       if(store.ok) await store.set(KEY, JSON.stringify(S));
     }catch(e){ /* no local store: sync is the system of record */ }
   }, 250);
+}
+/* What the website is allowed to know: that a product exists, its list
+ * price, and whether stock is healthy or low. Never a count, never a cost,
+ * never a customer's discount. Anything at zero is left out entirely, so
+ * the site cannot offer what is not on the shelf.
+ *
+ * Catalogue-only products are excluded too — the site should not advertise
+ * something that has never been stocked. */
+function webHidden(id){ return !!(S.settings.webHide && S.settings.webHide[id]); }
+function setWebShow(id, show){
+  S.settings.webHide = S.settings.webHide || {};
+  if(show) delete S.settings.webHide[id]; else S.settings.webHide[id] = 1;
+  save(); openItem(id);
+  toast(show ? "Shown on the website" : "Kept off the website");
+}
+function catalogPayload(){
+  const items = [];
+  S.items.forEach(i => {
+    if(i.kind || i.catalog) return;
+    const q = num(i.qty);
+    if(q <= 0) return;                                  // out = absent = unorderable
+    if(!(num(i.price) > 0)) return;                     // unpriced never goes public
+    if(S.settings.webHide && S.settings.webHide[i.id]) return;   // per-product opt-out
+    items.push({
+      name: i.name,
+      code: i.code || "",
+      dose: i.dose ? (i.dose + doseUnit(i)) : "",
+      price: num(i.price),
+      state: q <= num(i.reorder) ? "low" : "in",
+    });
+  });
+  return items.sort((a,b) => a.name.localeCompare(b.name));
+}
+async function publishCatalog(){
+  if(S.settings.webCatalog === false) return;           // off unless wanted
+  const url = syncURL(); if(!url) return;
+  try{
+    await fetch(url.replace(/\/sync\/?$/, "") + "/catalog", {
+      method:"POST", headers: syncHeaders(),
+      body: JSON.stringify({ items: catalogPayload() })
+    });
+  }catch(e){ /* the website having stale stock is not worth interrupting work */ }
 }
 function renderSyncState(){
   const ss = $("syncState");
@@ -860,7 +902,7 @@ function loginGate(){
   d.style.cssText = "position:fixed;inset:0;z-index:99999;background:#101214;display:flex;align-items:center;justify-content:center";
   d.innerHTML =
     '<div style="background:#1b1e22;padding:32px 28px;border-radius:14px;width:min(320px,90vw);text-align:center;color:#e8e8e8;font-family:inherit;box-shadow:0 8px 40px rgba(0,0,0,.5)">'+
-      '<div style="font-size:22px;font-weight:700;margin-bottom:4px">ITL Ops</div>'+
+      '<div style="font-size:22px;font-weight:700;margin-bottom:4px">APB Ops</div>'+
       '<div style="font-size:13px;opacity:.65;margin-bottom:18px">Enter your password to load your data</div>'+
       '<input id="lg_pw" type="password" autocomplete="current-password" placeholder="Password" '+
         'style="width:100%;box-sizing:border-box;padding:12px;border-radius:8px;border:1px solid #3a3f45;background:#101214;color:#e8e8e8;font-size:16px;margin-bottom:12px">'+
@@ -966,6 +1008,7 @@ async function pushSync(force, quiet){
     const j = await r.json();
     S.settings.syncRev = j.rev; S.settings.syncAt = j.at;
     syncDirty = false; syncOk = true; syncMsg = "";
+    publishCatalog();          // keep the website's availability honest
     saveLocal();
     if(!quiet) toast("Synced · revision " + j.rev);
     renderSyncState();
@@ -1135,11 +1178,11 @@ function backupAgeDays(){
 }
 async function doBackup(){
   const text = backupBlob();
-  const name = "itl-ops-" + toDateInput(Date.now()) + ".json";
+  const name = "apb-ops-" + toDateInput(Date.now()) + ".json";
   try{
     if(window.showSaveFilePicker){
       const h = await window.showSaveFilePicker({suggestedName:name,
-        types:[{description:"ITL Ops backup", accept:{"application/json":[".json"]}}]});
+        types:[{description:"APB Ops backup", accept:{"application/json":[".json"]}}]});
       const w = await h.createWritable();
       await w.write(text); await w.close();
     }else{
@@ -1161,7 +1204,7 @@ function restoreFile(file){
   fr.onload = () => {
     let parsed;
     try{ parsed = JSON.parse(fr.result); }catch(e){ toast("That isn't a backup file"); return; }
-    if(!parsed || (parsed.app !== "itlops" && parsed.app !== "itlops") || !parsed.data){ toast("That isn't an ITL Ops backup"); return; }
+    if(!parsed || (parsed.app !== "itlops" && parsed.app !== "apbops") || !parsed.data){ toast("That isn't an APB Ops backup"); return; }
     const d = parsed.data;
     const counts = ["items","lots","txns","orders","suppliers","supplies","pos","customers","quotes"]
       .map(k => k+" "+((d[k]||[]).length)).join(", ");
@@ -1268,7 +1311,7 @@ function backupNudge(){
 }
 async function emailBackup(){
   const text = backupBlob();
-  const name = "itl-ops-" + toDateInput(Date.now()) + ".json";
+  const name = "apb-ops-" + toDateInput(Date.now()) + ".json";
   const subject = "ITL Ops backup " + toDateInput(Date.now());
   // Best path: share the file straight into Gmail/mail app (Android, most mobile)
   try{
@@ -4433,6 +4476,11 @@ function openItem(id){
     '<div class="modebar" style="grid-template-columns:1fr 1fr;margin-bottom:10px">'+
       '<button aria-pressed="'+isStocked(i)+'" onclick="setCatalog(\''+i.id+'\',false)">Stocked</button>'+
       '<button aria-pressed="'+(!isStocked(i))+'" onclick="setCatalog(\''+i.id+'\',true)">Catalogue only</button></div>'+
+    '<div class="eyebrow" style="margin:12px 0 6px">Website</div>'+
+    '<div class="modebar" style="grid-template-columns:1fr 1fr;margin-bottom:6px">'+
+      '<button type="button" aria-pressed="'+(!webHidden(i.id))+'" onclick="setWebShow(\''+i.id+'\',1)">Show online</button>'+
+      '<button type="button" aria-pressed="'+(!!webHidden(i.id))+'" onclick="setWebShow(\''+i.id+'\',0)">Keep off the site</button></div>'+
+    '<p class="hint" style="margin-top:-4px">Off keeps it out of the public catalog entirely \u2014 personal stock, or anything not for sale.</p>'+
     '<div class="field"><label>Weight each (g) — used for shipping rates</label><input id="e_wt" type="number" step="any" value="'+(num(i.weight)||"")+'" placeholder="vial + packaging"></div>'+
     '<button class="btn full" style="margin-bottom:10px;border-color:#28503A;color:var(--ok)" onclick="messageSheet(\''+(i.supplierId||"")+'\',[S.items.find(x=>x.id===\''+i.id+'\')])">WhatsApp a restock request</button>'+
     '<button class="btn full" style="margin-bottom:10px" onclick="recordSaleSheet(\''+i.id+'\')">Record a past sale</button>'+
