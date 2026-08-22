@@ -35,8 +35,8 @@ if('serviceWorker' in navigator && location.protocol === 'https:'){
   --brand-dim:#245A7E;
   --ok:#4eba6f;         /* APB green, exact */
   --alert:#E2574F;
-  --cond:'APBSora',system-ui,sans-serif;
-  --body:'APBSora',system-ui,-apple-system,sans-serif;
+  --cond:"IBM Plex Sans Condensed",'Arial Narrow',system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,'SF Mono',Menlo,monospace;
   --pad:14px;
 }
@@ -336,7 +336,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260822-0955-8eed08";
+const BUILD = "20260822-1007-566fa3";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -4632,12 +4632,6 @@ function processLogo(src, threshold, cb){
   img.onerror = () => cb(null);
   img.src = src;
 }
-function useBuiltInLogo(backId, kind, stockKey){
-  persistLogo(DEFAULT_LOGO).then(() => {
-    toast("Using the built-in ITL mark");
-    brandSheet(backId, kind, stockKey);
-  });
-}
 function brandSheet(backId, kind, stockKey){
   const back = backId ? 'onclick="labelSheet(\''+backId+'\',\''+(kind||"vial")+'\',\''+(stockKey||"50x30")+'\')"' : 'onclick="closeSheet()"';
   sheet('<h2>Brand logo</h2>'+
@@ -4666,9 +4660,7 @@ function brandSheet(backId, kind, stockKey){
     '<div class="modebar" style="grid-template-columns:1fr 1fr;margin-top:12px">'+
       '<button id="lg_on"  aria-pressed="'+(S.settings.logoOn!==false?"true":"false")+'">Show on labels</button>'+
       '<button id="lg_off" aria-pressed="'+(S.settings.logoOn===false?"true":"false")+'">Hide</button></div>'+
-    '<button class="btn full" style="margin-bottom:8px" onclick="useBuiltInLogo('+
-      (backId ? "'"+backId+"'" : "null")+',\''+(kind||"vial")+'\',\''+(stockKey||"50x30")+'\')">Use the built-in ITL mark</button>'+
-    '<p class="hint" style="margin-top:-4px">Re-upload your logo after an app update to pick up a sharper conversion, or take the built-in mark.</p>'+
+    '<p class="hint" style="margin-top:-4px">Re-upload your logo after an app update to pick up a sharper conversion.</p>'+
     '<div class="sheetact"><button class="btn" '+back+'>Back</button>'+
     '<button class="btn warn" onclick="clearLogo()">Remove</button></div>');
 
