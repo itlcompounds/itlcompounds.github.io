@@ -336,7 +336,7 @@ input[type=file]{padding:8px;font-size:13px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
-const BUILD = "20260821-2042-82845d";
+const BUILD = "20260822-0009-7f05c6";
 
 /* ============ state ============ */
 /* ---- storage ---- */
@@ -1651,6 +1651,27 @@ function fromDateInput(v, fallback){
 // How many sellable units come in one purchase unit. Peptides ship ten to a
 // kit; water, sprayers and anything bought by the case may not. Set per
 // product; blank means the usual ten.
+// One product, one vocabulary. Peptides come ten vials to a kit; water comes
+// by the bottle, sprayers by the piece. The purchase form asks in whatever
+// unit the product actually uses instead of calling everything a kit.
+function setPack(itemId, n, noun){
+  const i = S.items.find(x => x.id === itemId); if(!i) return;
+  i.perKit = n; i.unitNoun = noun;
+  save();
+  // Redraw only the product list — newPOSheet() would reset the draft and
+  // throw away quantities already typed on other lines.
+  try{ if($("po_search")) poLinesRefresh($("po_search").value || ""); }catch(e){}
+  toast(i.name + " \u2014 bought by the " + noun + (n>1 ? " of "+n : ""));
+}
+function unitWords(itemId){
+  const n = packSize(itemId);
+  const i = S.items.find(x => x.id === itemId);
+  const noun = (i && (i.unitNoun||"").trim()) || (n > 1 ? "kit" : "each");
+  return { n, noun,
+           perLabel: n > 1 ? "$/"+noun : "$ each",
+           qtyLabel: n > 1 ? noun+"s" : "qty",
+           expand: v => n > 1 ? num(v)+" \u00d7 "+n+" = "+(num(v)*n)+" units" : num(v)+" \u00d7 1" };
+}
 function packSize(itemId){
   const i = S.items.find(x => x.id === itemId);
   const n = num(i && i.perKit);
@@ -1836,7 +1857,7 @@ function newPOSheet(){
       PO_STEPS.slice(0,5).map(k => '<option value="'+k+'">'+esc(PO_LABEL[k])+'</option>').join("")+'</select></div></div>'+
     '<div class="field"><label>Vendor</label><select id="po_sup" onchange="poLinesRefresh()">'+
       S.suppliers.map(s => '<option value="'+s.id+'">'+esc(s.name)+'</option>').join("")+'</select></div>'+
-    '<div class="eyebrow" style="margin:12px 0 6px">Kits to order</div>'+
+    '<div class="eyebrow" style="margin:12px 0 6px">What to order</div>'+
     '<input id="po_search" type="search" placeholder="Search products…" oninput="poLinesRefresh(this.value)" style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--slate);color:var(--fg);font-size:15px;margin-bottom:8px">'+
     '<div id="po_lines"></div>'+
     '<div id="po_warn"></div>'+
@@ -1921,18 +1942,28 @@ function poLinesRefresh(filter){
       : (() => { const o = bestOtherVendor(i.id, sup);
                  return o ? 'not on this vendor \u00b7 '+esc(o.sup.name)+' has it at '+money(o.price)
                           : 'no vendor price \u2014 type it'; })();
+    const uw = unitWords(i.id);
     return '<div class="row'+(short?' low':'')+(num(v)>0?' po_row_active':'')+' po_row" id="por_'+i.id+'">'+
       '<span class="nm"><b>'+esc(i.name)+(short?' <span class="pill alert">low</span>':'')+'</b>'+
-      '<small><b>'+esc((e && e.cat) || i.code || "")+'</b> \u00b7 '+num(i.qty)+' on hand \u00b7 '+info+'</small></span>'+
+      '<small><b>'+esc((e && e.cat) || i.code || "")+'</b> \u00b7 '+num(i.qty)+' on hand \u00b7 '+info+'</small>'+
+      (i.perKit == null
+        ? '<small class="po_units" data-item="'+i.id+'">How does this come? '+
+          '<button class="pill" onclick="setPack(\''+i.id+'\',10,\'kit\')">kit of 10</button> '+
+          '<button class="pill" onclick="setPack(\''+i.id+'\',1,\'each\')">one at a time</button></small>'
+        : '<small class="po_units" data-item="'+i.id+'" style="color:var(--steel)">'+(num(v)>0?uw.expand(v):"sold by the "+uw.noun+(uw.n>1?" of "+uw.n:""))+'</small>')+'</span>'+
       '<span style="display:flex;gap:4px;align-items:center;margin-left:auto">'+
       '<button class="pill" style="flex:none" onclick="openItem(\''+i.id+'\')">\u0045dit</button>'+
       '<span style="width:74px;flex:none"><input class="num po_p" data-item="'+i.id+'" type="number" step="any" inputmode="decimal" '+
-      'value="'+(prevP[i.id] != null ? prevP[i.id] : (p != null ? p : ""))+'" placeholder="$/kit" style="text-align:center;padding:6px"></span>'+
+      'value="'+(prevP[i.id] != null ? prevP[i.id] : (p != null ? p : ""))+'" placeholder="'+uw.perLabel+'" style="text-align:center;padding:6px"></span>'+
       '<span style="width:58px;flex:none"><input class="num po_k" data-item="'+i.id+'" '+
       'type="number" inputmode="numeric" min="0" value="'+v+'" style="text-align:center;padding:6px"></span></span></div>';
   }).join("") + (lead ? '<p class="hint">Past orders from this vendor landed in about '+lead+' days.</p>' : '');
   document.querySelectorAll(".po_k").forEach(el => el.addEventListener("input", function(){
     poDraft.qty[this.dataset.item] = this.value;
+    const uw = unitWords(this.dataset.item);
+    const hint = document.querySelector('.po_units[data-item="'+this.dataset.item+'"]');
+    if(hint) hint.textContent = num(this.value) > 0 ? uw.expand(this.value)
+             : "sold by the "+uw.noun+(uw.n>1?" of "+uw.n:"");
     poLiveTotal();
     const row = document.getElementById("por_"+this.dataset.item);
     if(row) row.classList.toggle("po_row_active", num(this.value) > 0);
@@ -1950,7 +1981,7 @@ function saveNewPO(){
     if(k > 0) lines.push({itemId:id, kits:k, kitPrice:num(poDraft.price[id])});
   });
   if(lines.some(l => l.kitPrice <= 0)){
-    toast("A selected product has no $/kit \u2014 type its price"); return;
+    toast("A selected product has no price \u2014 type it"); return;
   }
   if(!lines.length){ toast("Set a kit quantity"); return; }
   const po = {id:uid("p"), supplierId:$("po_sup").value,
@@ -1991,7 +2022,7 @@ function openPO(id){
     const it = S.items.find(x => x.id === l.itemId);
     return '<div class="row"><span class="nm"><b>'+esc(it?it.name:"?")+'</b><small>'+
       l.kits+' \u00d7 '+packSize(l.itemId)+' = '+(l.kits*packSize(l.itemId))+' units</small></span>'+
-      '<span class="rt"><b>'+money(num(l.kits)*num(l.kitPrice))+'</b>'+money(num(l.kitPrice))+'/kit</span>'+
+      '<span class="rt"><b>'+money(num(l.kits)*num(l.kitPrice))+'</b>'+money(num(l.kitPrice))+'/'+unitWords(l.itemId).noun+'</span>'+
       '<button class="pill" style="margin-left:6px;flex:none;color:var(--alert)" onclick="removePOLine(\''+id+'\','+i+')">Remove</button></div>';
   }).join("");
 
@@ -4368,8 +4399,11 @@ function openItem(id){
     '<div class="field"><label>Unit</label><select id="e_unit">'+
       ['mg','iu','mcg'].map(u=>'<option value="'+u+'"'+((i.unit||"mg")===u?' selected':'')+'>'+(u==='iu'?'IU':u)+'</option>').join("")+
     '</select></div>'+
-    '<div class="field"><label>Units per purchase unit \u2014 vials in a kit, bottles in a case</label>'+
-      '<input id="e_perkit" type="number" inputmode="numeric" value="'+(num(i.perKit)||10)+'"></div>'+
+    '<div class="grid2"><div class="field"><label>Bought as</label>'+
+      '<input id="e_unitnoun" value="'+esc(i.unitNoun||"")+'" placeholder="kit / case / bottle"></div>'+
+    '<div class="field"><label>Units in one</label>'+
+      '<input id="e_perkit" type="number" inputmode="numeric" value="'+(num(i.perKit)||10)+'"></div></div>'+
+    '<p class="hint" style="margin-top:-4px">A kit of 10 vials: kit, 10. A single bottle: bottle, 1. This is what the purchase form asks for.</p>'+
     '<div class="grid3"><div class="field"><label>Sales price \u2014 each</label><input id="e_price" type="number" step="any" value="'+num(i.price)+'"></div>'+
     '<div class="field"><label>On hand</label><input id="e_qty" type="number" value="'+num(i.qty)+'"></div>'+
     '<div class="field"><label>Reorder at</label><input id="e_re" type="number" value="'+num(i.reorder)+'"></div></div>'+
@@ -4455,6 +4489,7 @@ function saveItem(id, quiet){
   const i = S.items.find(x => x.id === id); if(!i) return;
   i.name = $("e_name").value.trim() || i.name;
   if($("e_perkit")) i.perKit = Math.max(1, num($("e_perkit").value) || 10);
+  if($("e_unitnoun")) i.unitNoun = $("e_unitnoun").value.trim();
   i.dose = $("e_dose").value.trim();
   if($("e_unit")) i.unit = $("e_unit").value;
   i.price = num($("e_price").value);
